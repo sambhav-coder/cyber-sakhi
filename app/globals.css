@@ -1,0 +1,61 @@
+﻿@tailwind base;
+@tailwind components;
+@tailwind utilities;
+
+@layer base {
+  body {
+    @apply bg-[#080811] text-slate-100 font-sans antialiased selection:bg-purple-600 selection:text-white;
+    background-image: 
+      radial-gradient(at 0% 0%, rgba(109, 40, 217, 0.15) 0px, transparent 50%),
+      radial-gradient(at 100% 0%, rgba(139, 92, 246, 0.10) 0px, transparent 50%),
+      radial-gradient(at 50% 100%, rgba(91, 33, 182, 0.15) 0px, transparent 60%);
+    background-attachment: fixed;
+    min-height: 100vh;
+  }
+}
+
+.glass-panel {
+  background: rgba(19, 19, 34, 0.75);
+  backdrop-filter: blur(16px);
+  -webkit-backdrop-filter: blur(16px);
+  border: 1px solid rgba(255, 255, 255, 0.08);
+}
+
+.glass-card {
+  background: rgba(24, 24, 46, 0.65);
+  backdrop-filter: blur(12px);
+  -webkit-backdrop-filter: blur(12px);
+  border: 1px solid rgba(139, 92, 246, 0.15);
+  transition: all 0.2s ease-in-out;
+}
+
+.glass-card:hover {
+  background: rgba(30, 30, 58, 0.85);
+  border-color: rgba(167, 139, 250, 0.35);
+  transform: translateY(-2px);
+  box-shadow: 0 10px 30px -10px rgba(109, 40, 217, 0.3);
+}
+
+.glow-purple {
+  box-shadow: 0 0 25px -5px rgba(139, 92, 246, 0.4);
+}
+
+.glow-red {
+  box-shadow: 0 0 30px 0px rgba(239, 68, 68, 0.5);
+}
+
+/* Custom scrollbar */
+::-webkit-scrollbar {
+  width: 8px;
+  height: 8px;
+}
+::-webkit-scrollbar-track {
+  background: #0d0d1a;
+}
+::-webkit-scrollbar-thumb {
+  background: #2b2b4d;
+  border-radius: 4px;
+}
+::-webkit-scrollbar-thumb:hover {
+  background: #4c1d95;
+}
