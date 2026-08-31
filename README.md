@@ -1,5 +1,4 @@
 # Cyber Sakhi — Unified AI Platform for Digital & Real-World Safety
-> **Presented By Team NullPointers** (Prashant Kumar, Dhairya Sharma, Manav Gupta, Sambhav Yadav)
 
 Cyber Sakhi is an AI-powered safety companion designed to provide holistic, proactive protection against both online harassment/extortion and real-world physical threats.
 
@@ -88,10 +87,4 @@ The application is deployed and accessible at
 `https://cyber-sakhi-sooty.vercel.app/`.
 ---
 
-## 👥 Hackathon Team Credits
 
-**Team NullPointers**:
-- **Prashant Kumar** — Team Leader | Research & Content
-- **Dhairya Sharma** — Presentation Lead
-- **Manav Gupta** — Frontend Developer
-- **Sambhav Yadav** — Backend Developer
