@@ -84,6 +84,8 @@ npm start
 ```
 The application will be accessible at `http://localhost:3000`.
 
+The application is deployed and accessible at
+`https://cyber-sakhi-sooty.vercel.app/`.
 ---
 
 ## 👥 Hackathon Team Credits
