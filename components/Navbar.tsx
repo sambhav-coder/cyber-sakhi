@@ -20,7 +20,9 @@ import {
   LogIn,
   LogOut,
   User,
+  Mail,
 } from "lucide-react";
+
 import { CyberSakhiLogo } from "./CyberSakhiLogo";
 import { SOSModal } from "./SOSModal";
 
@@ -38,6 +40,7 @@ export const Navbar: React.FC = () => {
     { href: "/detector", label: "Check Message", icon: Search },
     { href: "/sos", label: "VoiceShield SOS", icon: Radio },
     { href: "/locker", label: "Evidence Locker", icon: Lock },
+    { href: "/email-forensics", label: "Email Forensics", icon: Mail },
     { href: "/companion", label: "Sakhi AI", icon: MessageSquare },
     { href: "/contacts", label: "Contacts", icon: Users },
     { href: "/dashboard", label: "Dashboard", icon: LayoutDashboard },
