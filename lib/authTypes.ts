@@ -7,5 +7,6 @@ export interface AppUser {
   passwordHash?: string;
   role: UserRole;
   image?: string;
+  sakhiNumber?: string;
   createdAt: string;
 }

@@ -1,6 +1,7 @@
 import { NextAuthOptions } from "next-auth";
 import CredentialsProvider from "next-auth/providers/credentials";
 import GoogleProvider from "next-auth/providers/google";
+import { upsertOAuthProfile } from "./db/profiles";
 import { findUserByEmail, verifyUserPassword, isAdminEmail } from "./userStore";
 
 export const authOptions: NextAuthOptions = {
@@ -23,7 +24,7 @@ export const authOptions: NextAuthOptions = {
           throw new Error("Please enter both email and password.");
         }
 
-        const user = findUserByEmail(credentials.email);
+        const user = await findUserByEmail(credentials.email);
         if (!user || !user.passwordHash) {
           throw new Error("Invalid email or password.");
         }
@@ -45,15 +46,25 @@ export const authOptions: NextAuthOptions = {
 
   callbacks: {
     async jwt({ token, user, account }) {
+      if (account?.provider === "google") {
+        const email = (user?.email || token.email || "").toLowerCase().trim();
+        if (email) {
+          const profile = await upsertOAuthProfile({
+            email,
+            name: user?.name || token.name || email,
+            image: user?.image || null,
+          });
+          token.id = profile.id;
+          token.role = profile.role;
+        } else {
+          token.role = isAdminEmail(token.email || "") ? "ADMIN" : "USER";
+        }
+        return token;
+      }
+
       if (user) {
         token.id = user.id;
         token.role = user.role;
-      }
-
-      // If user logged in via OAuth (e.g. Google), evaluate role from trusted admin whitelist
-      if (account && account.provider === "google") {
-        const userEmail = token.email || "";
-        token.role = isAdminEmail(userEmail) ? "ADMIN" : "USER";
       }
 
       // Ensure fallback role

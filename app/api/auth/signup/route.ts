@@ -21,7 +21,7 @@ export async function POST(req: NextRequest) {
       );
     }
 
-    const existing = findUserByEmail(email);
+    const existing = await findUserByEmail(email);
     if (existing) {
       return NextResponse.json(
         { error: "An account with this email address already exists. Please log in." },
