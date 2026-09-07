@@ -226,7 +226,7 @@ export function decodeMimeSubject(subject?: string): string {
         if (encoding.toUpperCase() === 'Q') {
           // Quoted-printable decoding
           const text = encodedText.replace(/_/g, ' ');
-          return decodeURIComponent(text.replace(/=([0-9A-F]{2})/g, (_, hex) => 
+          return decodeURIComponent(text.replace(/=([0-9A-F]{2})/g, (_: string, hex: string) => 
             String.fromCharCode(parseInt(hex, 16))
           ));
         } else if (encoding.toUpperCase() === 'B') {

@@ -391,7 +391,7 @@ ${result.indicators.map(i => `• ${i.type}: ${i.value}${i.malicious ? " (SUSPIC
       // Create evidence item
       const newEvidence: EvidenceItem = {
         id: "ev_" + Date.now(),
-        title: `Email Investigation: ${result.headers.subject?.substring(0, 50) || "Unknown Subject"}${result.headers.subject?.length > 50 ? "..." : ""}`,
+        title: `Email Investigation: ${result.headers.subject?.substring(0, 50) || "Unknown Subject"}${(result.headers.subject?.length ?? 0) > 50 ? "..." : ""}`,
         filename: `email_forensic_${result.id}.json`,
         fileType: "application/json",
         fileSize: new Blob([analysisString]).size,
