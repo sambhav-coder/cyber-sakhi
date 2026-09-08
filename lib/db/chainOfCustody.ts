@@ -1,6 +1,7 @@
 import { getSupabaseServer } from "@/lib/supabaseServer";
-import { throwIfError } from "./errors";
+import { throwIfError, DatabaseError } from "./errors";
 import type { ChainOfCustodyRow } from "./types";
+import { computeSha256 } from "@/lib/encryption";
 
 export async function listChainOfCustody(
   evidenceId: string
@@ -15,25 +16,215 @@ export async function listChainOfCustody(
   return (data || []) as ChainOfCustodyRow[];
 }
 
+async function computeEventHash(
+  evidenceId: string,
+  action: string,
+  actorId: string | undefined,
+  notes: string | undefined,
+  previousHash: string | null,
+  timestamp: string
+): Promise<string> {
+  const canonicalString = JSON.stringify({
+    evidence_id: evidenceId,
+    action: action,
+    actor_id: actorId,
+    notes: notes,
+    previous_hash: previousHash,
+    timestamp: timestamp,
+  });
+
+  try {
+    return await computeSha256(canonicalString);
+  } catch {
+    const crypto = require("crypto");
+    return crypto.createHash("sha256").update(canonicalString).digest("hex");
+  }
+}
+
 export async function appendChainOfCustody(input: {
   evidenceId: string;
   action: string;
   actorId?: string;
   notes?: string;
-  hash?: string;
+  previousHash?: string;
 }): Promise<ChainOfCustodyRow> {
-  const { data, error } = await getSupabaseServer()
-    .from("chain_of_custody")
-    .insert({
-      evidence_id: input.evidenceId,
-      action: input.action,
-      actor_id: input.actorId ?? null,
-      notes: input.notes ?? null,
-      hash: input.hash ?? null,
-    })
-    .select("*")
-    .single();
+  const previousEvents = await listChainOfCustody(input.evidenceId);
+  const previousHash = input.previousHash ??
+    (previousEvents.length > 0
+      ? previousEvents[previousEvents.length - 1].event_hash ??
+        previousEvents[previousEvents.length - 1].hash
+      : null);
 
-  throwIfError(error, "Failed to append chain of custody.");
-  return data as ChainOfCustodyRow;
+  const timestamp = new Date().toISOString();
+  const eventHash = await computeEventHash(
+    input.evidenceId,
+    input.action,
+    input.actorId,
+    input.notes,
+    previousHash,
+    timestamp
+  );
+
+  try {
+    const { data, error } = await getSupabaseServer()
+      .from("chain_of_custody")
+      .insert({
+        evidence_id: input.evidenceId,
+        action: input.action,
+        actor_id: input.actorId ?? null,
+        notes: input.notes ?? null,
+        previous_hash: previousHash,
+        event_hash: eventHash,
+        hash: eventHash,
+        created_at: timestamp,
+      })
+      .select("*")
+      .maybeSingle();
+
+    if (error) {
+      throw new DatabaseError(error.message || "Insert failed", error.code);
+    }
+
+    if (!data) {
+      throw new DatabaseError("No row returned after insert");
+    }
+
+    return data as ChainOfCustodyRow;
+  } catch (err: any) {
+    const isMissingColumn =
+      err?.message?.includes("previous_hash") ||
+      err?.message?.includes("event_hash") ||
+      err?.code === "42703";
+
+    if (isMissingColumn) {
+      const { data, error } = await getSupabaseServer()
+        .from("chain_of_custody")
+        .insert({
+          evidence_id: input.evidenceId,
+          action: input.action,
+          actor_id: input.actorId ?? null,
+          notes: input.notes ?? null,
+          hash: eventHash,
+          created_at: timestamp,
+        })
+        .select("*")
+        .maybeSingle();
+
+      throwIfError(error, "Failed to append chain of custody.");
+      if (!data) throw new DatabaseError("No row returned after legacy insert");
+      return data as ChainOfCustodyRow;
+    }
+
+    throw err;
+  }
+}
+
+export interface ChainVerificationResult {
+  isValid: boolean;
+  errors: string[];
+  verifiedEventCount: number;
+  totalEventCount: number;
+  schemaVersion: "new" | "legacy" | "mixed";
+}
+
+async function verifyHash(data: string, expectedHash: string): Promise<boolean> {
+  let calculatedHash: string;
+  try {
+    calculatedHash = await computeSha256(data);
+  } catch {
+    const crypto = require("crypto");
+    calculatedHash = crypto.createHash("sha256").update(data).digest("hex");
+  }
+  return calculatedHash === expectedHash;
+}
+
+export async function verifyChainOfCustody(
+  evidenceId: string
+): Promise<ChainVerificationResult> {
+  const events = await listChainOfCustody(evidenceId);
+  const errors: string[] = [];
+  let verifiedEventCount = 0;
+  let schemaVersion: "new" | "legacy" | "mixed" = "new";
+
+  if (events.length === 0) {
+    return {
+      isValid: true,
+      errors: [],
+      verifiedEventCount: 0,
+      totalEventCount: 0,
+      schemaVersion: "new",
+    };
+  }
+
+  const hasNewSchema = events.some(e => e.event_hash !== null && e.event_hash !== '');
+  const hasLegacySchema = events.some(e => e.hash !== null && e.hash !== '');
+
+  if (hasNewSchema && hasLegacySchema) {
+    schemaVersion = "mixed";
+  } else if (hasLegacySchema) {
+    schemaVersion = "legacy";
+  }
+
+  for (let i = 0; i < events.length; i++) {
+    const event = events[i];
+
+    if (schemaVersion === "legacy") {
+      verifiedEventCount++;
+      continue;
+    }
+
+    const hasNewFields = (event.previous_hash !== null && event.previous_hash !== '') ||
+                         (event.event_hash !== null && event.event_hash !== '');
+
+    if (hasNewFields) {
+      if (i === 0) {
+        if (event.previous_hash !== null) {
+          errors.push(`Event ${i}: First event should have previous_hash=null`);
+        }
+      } else {
+        const previousEvent = events[i - 1];
+        const prevHash = previousEvent.event_hash || previousEvent.hash;
+        if (event.previous_hash !== prevHash) {
+          errors.push(`Event ${i}: previous_hash does not match previous event hash`);
+        }
+      }
+    }
+
+    if (event.event_hash !== null && event.event_hash !== '') {
+      const isLegacyMd5 =
+        typeof event.event_hash === "string" &&
+        /^[a-f0-9]{32}$/i.test(event.event_hash);
+
+      if (isLegacyMd5) {
+        verifiedEventCount++;
+        continue;
+      }
+
+      const canonicalString = JSON.stringify({
+        evidence_id: event.evidence_id,
+        action: event.action,
+        actor_id: event.actor_id,
+        notes: event.notes,
+        previous_hash: event.previous_hash,
+        timestamp: event.created_at,
+      });
+
+      const hashOk = await verifyHash(canonicalString, event.event_hash);
+      if (!hashOk) {
+        errors.push(`Event ${i}: event_hash does not match calculated hash`);
+      } else {
+        verifiedEventCount++;
+      }
+    } else {
+      verifiedEventCount++;
+    }
+  }
+
+  return {
+    isValid: errors.length === 0,
+    errors,
+    verifiedEventCount,
+    totalEventCount: events.length,
+    schemaVersion,
+  };
 }

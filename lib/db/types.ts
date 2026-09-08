@@ -70,7 +70,9 @@ export type ChainOfCustodyRow = {
   action: string;
   actor_id: string | null;
   notes: string | null;
-  hash: string | null;
+  previous_hash: string | null;
+  event_hash: string | null;
+  hash: string | null; // Legacy field for backwards compatibility
   created_at: string;
 };
 

@@ -155,6 +155,13 @@ export const Navbar: React.FC = () => {
                       <button
                         onClick={() => {
                           setIsUserMenuOpen(false);
+                          // Clear all Gmail token cookies on logout
+                          document.cookie.split(";").forEach((cookie) => {
+                            const [name] = cookie.trim().split("=");
+                            if (name && name.startsWith("cyber_sakhi_gmail_token_")) {
+                              document.cookie = `${name}=; expires=Thu, 01 Jan 1970 00:00:00 UTC; path=/;`;
+                            }
+                          });
                           signOut({ callbackUrl: "/login" });
                         }}
                         className="w-full flex items-center gap-2 px-3 py-2 rounded-xl text-red-400 hover:bg-red-950/50 text-left font-medium transition"
@@ -228,7 +235,16 @@ export const Navbar: React.FC = () => {
                     <div className="text-[10px] text-purple-300">Role: {session.user.role}</div>
                   </div>
                   <button
-                    onClick={() => signOut({ callbackUrl: "/login" })}
+                    onClick={() => {
+                      // Clear all Gmail token cookies on logout
+                      document.cookie.split(";").forEach((cookie) => {
+                        const [name] = cookie.trim().split("=");
+                        if (name && name.startsWith("cyber_sakhi_gmail_token_")) {
+                          document.cookie = `${name}=; expires=Thu, 01 Jan 1970 00:00:00 UTC; path=/;`;
+                        }
+                      });
+                      signOut({ callbackUrl: "/login" });
+                    }}
                     className="text-red-400 hover:text-red-300 font-semibold text-xs"
                   >
                     Sign Out

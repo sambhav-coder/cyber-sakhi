@@ -12,7 +12,7 @@ const GMAIL_STATE_COOKIE = "cyber_sakhi_gmail_oauth_state";
 export async function GET(req: NextRequest) {
   const session = await getServerSession(authOptions);
 
-  if (!session?.user?.email) {
+  if (!session?.user?.id || !session?.user?.email) {
     return NextResponse.redirect(
       new URL("/login?error=Please%20login%20first", req.url)
     );
@@ -132,8 +132,10 @@ export async function GET(req: NextRequest) {
     new URL("/email-forensics/gmail?gmail=connected", req.url)
   );
 
+  // Store Gmail token in user-scoped cookie
+  const userCookieName = getGmailTokenCookieName(session.user.id);
   response.cookies.set({
-    name: getGmailTokenCookieName(),
+    name: userCookieName,
     value: encryptGmailToken(tokenPayload),
     httpOnly: true,
     secure: process.env.NODE_ENV === "production",

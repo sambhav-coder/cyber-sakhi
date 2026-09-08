@@ -1,6 +1,6 @@
 import crypto from "crypto";
 
-const COOKIE_NAME = "cyber_sakhi_gmail_token";
+const COOKIE_PREFIX = "cyber_sakhi_gmail_token_";
 
 function getEncryptionKey(): Buffer {
   const secret = process.env.NEXTAUTH_SECRET;
@@ -58,6 +58,18 @@ export function decryptGmailToken(payload: string): string {
   return decrypted.toString("utf8");
 }
 
-export function getGmailTokenCookieName(): string {
-  return COOKIE_NAME;
+/**
+ * Get user-specific Gmail token cookie name
+ * This ensures Gmail tokens are scoped per authenticated user
+ */
+export function getGmailTokenCookieName(userId: string): string {
+  return `${COOKIE_PREFIX}${userId}`;
+}
+
+/**
+ * Clear all Gmail token cookies (for logout/account switching)
+ */
+export function clearAllGmailTokenCookies(): string[] {
+  // Return all possible Gmail token cookie patterns for cleanup
+  return [COOKIE_PREFIX];
 }

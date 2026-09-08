@@ -43,6 +43,7 @@ export async function POST(req: NextRequest) {
           name: newUser.name,
           email: newUser.email,
           role: newUser.role,
+          sakhi_number: newUser.sakhiNumber || null,
         },
       },
       { status: 201 }

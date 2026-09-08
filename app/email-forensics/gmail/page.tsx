@@ -2,6 +2,7 @@
 
 import React, { useCallback, useEffect, useMemo, useState } from "react";
 import Link from "next/link";
+import { useSession } from "next-auth/react";
 import {
   AlertCircle,
   ArrowLeft,
@@ -164,6 +165,9 @@ function formatBytes(bytes: number | undefined | null): string {
 }
 
 export default function GmailForensicsPage() {
+  const { data: session, status: sessionStatus } = useSession();
+  const [currentUserId, setCurrentUserId] = useState<string | null>(null);
+  
   const [messages, setMessages] = useState<EnrichedGmailMessage[]>([]);
   const [isLoading, setIsLoading] = useState(false);
   const [error, setError] = useState<string | null>(null);
@@ -175,7 +179,42 @@ export default function GmailForensicsPage() {
   const [sidebarFolder, setSidebarFolder] = useState<string>("INBOX");
   const [searchQuery, setSearchQuery] = useState<string>("");
 
+  // Reset all Gmail state when the authenticated user changes
+  useEffect(() => {
+    if (sessionStatus === "authenticated" && session?.user?.id) {
+      if (currentUserId !== session.user.id) {
+        // User has changed - reset all Gmail state
+        setCurrentUserId(session.user.id);
+        setMessages([]);
+        setSelectedIds(new Set());
+        setStarredLocal(new Set());
+        setSidebarFolder("INBOX");
+        setSearchQuery("");
+        setError(null);
+        setIsConnected(null);
+        setAnalyzingId(null);
+      }
+    } else if (sessionStatus === "unauthenticated") {
+      // User logged out - reset state
+      setCurrentUserId(null);
+      setMessages([]);
+      setSelectedIds(new Set());
+      setStarredLocal(new Set());
+      setSidebarFolder("INBOX");
+      setSearchQuery("");
+      setError(null);
+      setIsConnected(null);
+      setAnalyzingId(null);
+    }
+  }, [sessionStatus, session?.user?.id, currentUserId]);
+
   const loadMessages = useCallback(async () => {
+    if (!session?.user?.id) {
+      setError("Please login to access Gmail integration.");
+      setIsConnected(false);
+      return;
+    }
+
     setIsLoading(true);
     setError(null);
 
@@ -223,14 +262,30 @@ export default function GmailForensicsPage() {
     } finally {
       setIsLoading(false);
     }
-  }, []);
+  }, [session?.user?.id]);
 
   useEffect(() => {
-    loadMessages();
-  }, [loadMessages]);
+    if (sessionStatus === "authenticated" && session?.user?.id) {
+      loadMessages();
+    }
+  }, [loadMessages, sessionStatus, session?.user?.id]);
 
   const handleConnectGmail = () => {
     window.location.href = "/api/gmail/connect";
+  };
+
+  const handleDisconnectGmail = async () => {
+    if (!session?.user?.id) return;
+
+    // Clear user's Gmail token cookie
+    document.cookie = `cyber_sakhi_gmail_token_${session.user.id}=; expires=Thu, 01 Jan 1970 00:00:00 UTC; path=/;`;
+    
+    // Reset local state
+    setMessages([]);
+    setSelectedIds(new Set());
+    setStarredLocal(new Set());
+    setIsConnected(false);
+    setError(null);
   };
 
   const handleAnalyze = async (messageId: string) => {
@@ -380,6 +435,16 @@ export default function GmailForensicsPage() {
         </div>
 
         <div className="flex gap-2">
+          {isConnected && (
+            <button
+              type="button"
+              onClick={handleDisconnectGmail}
+              className="inline-flex items-center gap-2 px-4 py-2 rounded-xl bg-red-950/80 hover:bg-red-900/70 border border-red-700/50 text-red-300 text-xs font-bold transition"
+            >
+              <ShieldAlert className="w-4 h-4" />
+              Disconnect Gmail
+            </button>
+          )}
           <button
             type="button"
             onClick={loadMessages}

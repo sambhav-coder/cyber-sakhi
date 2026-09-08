@@ -23,7 +23,7 @@ export async function GET(
 ) {
   const session = await getServerSession(authOptions);
 
-  if (!session?.user?.email) {
+  if (!session?.user?.id || !session?.user?.email) {
     return NextResponse.json(
       { error: "Please login first." },
       { status: 401 }
@@ -37,9 +37,9 @@ export async function GET(
     );
   }
 
-  const encryptedToken = req.cookies.get(
-    getGmailTokenCookieName()
-  )?.value;
+  // Get user-scoped Gmail token cookie
+  const userCookieName = getGmailTokenCookieName(session.user.id);
+  const encryptedToken = req.cookies.get(userCookieName)?.value;
 
   if (!encryptedToken) {
     return NextResponse.json(
@@ -105,8 +105,9 @@ export async function GET(
       internalDate: data.internalDate || null,
     });
 
+    // Update user-scoped cookie with refreshed token
     result.cookies.set({
-      name: getGmailTokenCookieName(),
+      name: userCookieName,
       value: encryptGmailToken(JSON.stringify(tokenData)),
       httpOnly: true,
       secure: process.env.NODE_ENV === "production",

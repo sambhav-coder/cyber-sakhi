@@ -14,10 +14,33 @@ export async function listEvidenceForUser(userId: string): Promise<EvidenceRow[]
   return (data || []) as EvidenceRow[];
 }
 
+export async function getEvidenceById(evidenceId: string, userId: string): Promise<EvidenceRow | null> {
+  const { data, error } = await getSupabaseServer()
+    .from("evidence")
+    .select("*")
+    .eq("id", evidenceId)
+    .eq("user_id", userId)
+    .single();
+
+  if (error && error.code === "PGRST116") {
+    return null;
+  }
+  throwIfError(error, "Failed to retrieve evidence.");
+  return data as EvidenceRow;
+}
+
+export async function verifyEvidenceOwnership(evidenceId: string, userId: string): Promise<boolean> {
+  const evidence = await getEvidenceById(evidenceId, userId);
+  return evidence !== null;
+}
+
 export async function createEvidence(input: {
   userId: string;
   caseId?: string;
   item: EvidenceItem;
+  encryptedContent?: string;
+  encryptionIv?: string;
+  encryptedSize?: number;
 }): Promise<EvidenceRow> {
   const { data, error } = await getSupabaseServer()
     .from("evidence")
@@ -34,6 +57,9 @@ export async function createEvidence(input: {
       integrity_verified: input.item.integrityVerified,
       simulated_ipfs_cid: input.item.simulatedIpfsCid,
       simulated_tx_hash: input.item.simulatedTxHash,
+      encrypted_content: input.encryptedContent ?? null,
+      encryption_iv: input.encryptionIv ?? null,
+      encrypted_size: input.encryptedSize ?? null,
       created_at: input.item.timestamp,
     })
     .select("*")

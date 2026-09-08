@@ -108,10 +108,14 @@ export async function upsertOAuthProfile(data: {
   image?: string | null;
 }): Promise<AppUser> {
   const email = normalizeEmail(data.email);
+  console.log("[Supabase] upsertOAuthProfile called for email:", email);
+  
   const existing = await findProfileByEmail(email);
   const role: UserRole = isAdminEmail(email) ? "ADMIN" : existing?.role || "USER";
+  console.log("[Supabase] Profile check - existing:", !!existing, "role:", role);
 
   if (existing) {
+    console.log("[Supabase] Updating existing profile id:", existing.id);
     const { data: updated, error } = await getSupabaseServer()
       .from("profiles")
       .update({
@@ -124,16 +128,20 @@ export async function upsertOAuthProfile(data: {
       .single();
 
     throwIfError(error, "Failed to update OAuth profile.");
+    console.log("[Supabase] Profile updated successfully - id:", updated.id);
     return mapProfile(updated as ProfileRecord);
   }
 
-  return createProfile({
+  console.log("[Supabase] Creating new profile for email:", email);
+  const newProfile = await createProfile({
     name: data.name.trim() || email,
     email,
     image: data.image ?? null,
     passwordHash: null,
     role,
   });
+  console.log("[Supabase] New profile created - id:", newProfile.id);
+  return newProfile;
 }
 
 let seedPromise: Promise<void> | null = null;

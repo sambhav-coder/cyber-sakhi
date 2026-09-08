@@ -1,4 +1,4 @@
-﻿import { EvidenceItem, TrustedContact, SosEvent, AdminIncident, ThreatAnalysisResult } from "./types";
+import { EvidenceItem, TrustedContact, SosEvent, AdminIncident, ThreatAnalysisResult } from "./types";
 
 const CONTACTS_KEY = "cyber_sakhi_contacts";
 const EVIDENCE_KEY = "cyber_sakhi_evidence";
@@ -191,3 +191,29 @@ export function addScanHistoryItem(scan: ThreatAnalysisResult): void {
   const updated = [scan, ...current.slice(0, 19)]; // keep latest 20
   localStorage.setItem(SCAN_HISTORY_KEY, JSON.stringify(updated));
 }
+
+const PROFILE_DRAFT_KEY = "cyber_sakhi_profile_draft";
+
+export interface ExtendedProfileDraft {
+  age?: string;
+  city?: string;
+  phone?: string;
+}
+
+export function getStoredProfileDraft(): ExtendedProfileDraft {
+  if (typeof window === "undefined") return {};
+  const raw = localStorage.getItem(PROFILE_DRAFT_KEY);
+  if (!raw) return {};
+  try {
+    return JSON.parse(raw) as ExtendedProfileDraft;
+  } catch {
+    return {};
+  }
+}
+
+export function saveStoredProfileDraft(draft: ExtendedProfileDraft): void {
+  if (typeof window === "undefined") return;
+  localStorage.setItem(PROFILE_DRAFT_KEY, JSON.stringify(draft));
+}
+
+

@@ -5,11 +5,21 @@ import { upsertOAuthProfile } from "./db/profiles";
 import { findUserByEmail, verifyUserPassword, isAdminEmail } from "./userStore";
 
 export const authOptions: NextAuthOptions = {
+  // Ensure NEXTAUTH_URL is set correctly for production
+  // In production on Vercel, this should be set to the canonical domain URL
+  // If not set, NextAuth will attempt to infer it from the request
   providers: [
     // 1. Google OAuth Provider
     GoogleProvider({
       clientId: process.env.GOOGLE_CLIENT_ID || "demo-google-client-id",
       clientSecret: process.env.GOOGLE_CLIENT_SECRET || "demo-google-client-secret",
+      // Allow user to select account and force consent for proper account switching
+      authorization: {
+        params: {
+          prompt: "consent",
+          access_type: "offline",
+        },
+      },
     }),
 
     // 2. Email + Password Credentials Provider
@@ -39,6 +49,7 @@ export const authOptions: NextAuthOptions = {
           name: user.name,
           email: user.email,
           role: user.role,
+          sakhiNumber: user.sakhiNumber,
         };
       },
     }),
@@ -48,16 +59,29 @@ export const authOptions: NextAuthOptions = {
     async jwt({ token, user, account }) {
       if (account?.provider === "google") {
         const email = (user?.email || token.email || "").toLowerCase().trim();
+        console.log("[NextAuth JWT] Google OAuth callback - email:", email);
+
         if (email) {
-          const profile = await upsertOAuthProfile({
-            email,
-            name: user?.name || token.name || email,
-            image: user?.image || null,
-          });
-          token.id = profile.id;
-          token.role = profile.role;
+          try {
+            console.log("[NextAuth JWT] Attempting profile upsert for:", email);
+            const profile = await upsertOAuthProfile({
+              email,
+              name: user?.name || token.name || email,
+              image: user?.image || null,
+            });
+            token.id = profile.id;
+            token.role = profile.role;
+            token.sakhiNumber = profile.sakhiNumber;
+            console.log("[NextAuth JWT] Profile upsert successful - id:", profile.id, "role:", profile.role, "sakhi:", profile.sakhiNumber);
+          } catch (error) {
+            console.error("[NextAuth JWT] Failed to upsert OAuth profile:", error);
+            token.role = isAdminEmail(email) ? "ADMIN" : "USER";
+            token.id = token.sub || user?.id || "";
+            console.log("[NextAuth JWT] Using fallback - id:", token.id, "role:", token.role);
+          }
         } else {
           token.role = isAdminEmail(token.email || "") ? "ADMIN" : "USER";
+          console.log("[NextAuth JWT] No email available, using fallback role:", token.role);
         }
         return token;
       }
@@ -65,11 +89,13 @@ export const authOptions: NextAuthOptions = {
       if (user) {
         token.id = user.id;
         token.role = user.role;
+        token.sakhiNumber = (user as any).sakhiNumber;
+        console.log("[NextAuth JWT] Credentials login - id:", user.id, "role:", user.role, "sakhi:", (user as any).sakhiNumber);
       }
 
-      // Ensure fallback role
       if (!token.role) {
         token.role = "USER";
+        console.log("[NextAuth JWT] No role set, using fallback USER");
       }
 
       return token;
@@ -79,8 +105,20 @@ export const authOptions: NextAuthOptions = {
       if (session.user) {
         session.user.id = (token.id as string) || (token.sub as string) || "";
         session.user.role = (token.role as "USER" | "ADMIN") || "USER";
+        session.user.sakhiNumber = token.sakhiNumber as string | undefined;
+        console.log("[NextAuth Session] Session created - id:", session.user.id, "role:", session.user.role, "sakhi:", session.user.sakhiNumber);
       }
       return session;
+    },
+    
+    async redirect({ url, baseUrl }) {
+      console.log("[NextAuth Redirect] Redirect callback - url:", url, "baseUrl:", baseUrl);
+      // Allows relative callback URLs
+      if (url.startsWith("/")) return `${baseUrl}${url}`;
+      // Allows callback URLs on the same origin
+      else if (new URL(url).origin === baseUrl) return url;
+      // Fallback to dashboard
+      return `${baseUrl}/dashboard`;
     },
   },
 
@@ -95,4 +133,15 @@ export const authOptions: NextAuthOptions = {
   },
 
   secret: process.env.NEXTAUTH_SECRET || "cyber-sakhi-security-secret-key-2026-auth",
+  
+  // Debug: log NEXTAUTH_URL in development to help diagnose OAuth issues
+  debug: process.env.NODE_ENV === "development",
 };
+
+// Log environment configuration for debugging (safe logging only)
+console.log("[NextAuth Config] Environment check:", {
+  hasNextAuthSecret: !!process.env.NEXTAUTH_SECRET,
+  hasNextAuthUrl: !!process.env.NEXTAUTH_URL,
+  hasGoogleClientId: !!process.env.GOOGLE_CLIENT_ID,
+  nodeEnv: process.env.NODE_ENV,
+});
