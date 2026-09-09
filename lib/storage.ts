@@ -217,3 +217,34 @@ export function saveStoredProfileDraft(draft: ExtendedProfileDraft): void {
 }
 
 
+
+/* ------------------------------------------------------------------ *
+ * SOS event log.
+ *
+ * SOS_EVENTS_KEY was declared above but never read or written, so the
+ * emergency half of the dashboard had no data source. These are the
+ * accessors for it. Newest first, capped at 30 records.
+ * ------------------------------------------------------------------ */
+
+export function getStoredSosEvents(): SosEvent[] {
+  if (typeof window === "undefined") return [];
+  const raw = localStorage.getItem(SOS_EVENTS_KEY);
+  if (!raw) return [];
+  try {
+    const parsed = JSON.parse(raw);
+    return Array.isArray(parsed) ? parsed : [];
+  } catch {
+    return [];
+  }
+}
+
+export function saveStoredSosEvents(events: SosEvent[]): void {
+  if (typeof window === "undefined") return;
+  localStorage.setItem(SOS_EVENTS_KEY, JSON.stringify(events));
+}
+
+export function addSosEvent(event: SosEvent): void {
+  if (typeof window === "undefined") return;
+  const current = getStoredSosEvents();
+  saveStoredSosEvents([event, ...current.slice(0, 29)]);
+}

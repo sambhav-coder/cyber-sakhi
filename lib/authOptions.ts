@@ -3,6 +3,39 @@ import CredentialsProvider from "next-auth/providers/credentials";
 import GoogleProvider from "next-auth/providers/google";
 import { upsertOAuthProfile } from "./db/profiles";
 import { findUserByEmail, verifyUserPassword, isAdminEmail } from "./userStore";
+import {
+  DEV_LOGIN_PROVIDER_ID,
+  findDevPersona,
+  isDevLoginEnabled,
+} from "./devAuth";
+
+/**
+ * Local-only sign-in that skips Supabase entirely. Spread into the
+ * providers array only when isDevLoginEnabled() is true, so it does not
+ * exist at all in a production build.
+ */
+const devLoginProvider = CredentialsProvider({
+  id: DEV_LOGIN_PROVIDER_ID,
+  name: "Developer Bypass (local only)",
+  credentials: {
+    persona: { label: "Persona", type: "text" },
+  },
+  async authorize(credentials) {
+    if (!isDevLoginEnabled()) {
+      throw new Error("Developer bypass is disabled.");
+    }
+    const persona = findDevPersona(credentials?.persona || "user");
+    if (!persona) throw new Error("Unknown developer persona.");
+
+    return {
+      id: persona.id,
+      name: persona.name,
+      email: persona.email,
+      role: persona.role,
+      sakhiNumber: persona.sakhiNumber,
+    };
+  },
+});
 
 export const authOptions: NextAuthOptions = {
   // Ensure NEXTAUTH_URL is set correctly for production
@@ -53,6 +86,9 @@ export const authOptions: NextAuthOptions = {
         };
       },
     }),
+
+    // 3. Local development bypass — absent entirely in production builds.
+    ...(isDevLoginEnabled() ? [devLoginProvider] : []),
   ],
 
   callbacks: {
