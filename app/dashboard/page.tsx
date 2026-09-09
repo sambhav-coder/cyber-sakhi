@@ -227,7 +227,7 @@ export default function DashboardPage() {
               : `${vault.pct}% checksum verified · ${formatBytes(vault.bytes)}`
           }
           tone={vault.total > 0 && vault.pct === 100 ? "good" : "neutral"}
-          icon={<Lock className="w-4 h-4 text-sky-400" />}
+          icon={<Lock className="w-4 h-4 text-emergency-400" />}
         />
         <StatTile
           label="Trusted Circle"

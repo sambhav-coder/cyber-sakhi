@@ -395,14 +395,14 @@ export function buildSnapshot(): GlobalSnapshot {
  * increases monotonically against the dark chart surface. Never a rainbow.
  */
 export const CHOROPLETH_STEPS = [
-  "#082f49",
-  "#0c4a6e",
-  "#0369a1",
-  "#0ea5e9",
-  "#7dd3fc",
+  "#7f1d1d",
+  "#b91c1c",
+  "#ef4444",
+  "#f87171",
+  "#fecaca",
 ];
 
-export const NO_DATA_FILL = "#1e2233";
+export const NO_DATA_FILL = "#141420";
 
 /** Quintile-ish thresholds on reports per million online users. */
 export function choroplethBins(countries: CountryThreatRecord[]): number[] {

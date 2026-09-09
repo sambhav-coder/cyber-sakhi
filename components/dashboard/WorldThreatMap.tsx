@@ -172,9 +172,9 @@ export const WorldThreatMap: React.FC<WorldThreatMapProps> = ({
                   }
                   stroke={
                     isSelected
-                      ? "#bae6fd"
+                      ? "#fecaca"
                       : isHovered
-                      ? "#7dd3fc"
+                      ? "#fca5a5"
                       : "rgba(255,255,255,0.10)"
                   }
                   strokeWidth={isSelected ? 1.6 : isHovered ? 1.2 : 0.4}

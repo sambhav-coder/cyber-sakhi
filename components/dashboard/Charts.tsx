@@ -16,8 +16,8 @@ import { DistributionSlice, TrendDay } from "@/lib/safetyScore";
  *  - Values and labels wear text colours, never the series colour.
  * ------------------------------------------------------------------ */
 
-const SERIES = "#38bdf8"; // sakhi-500 — the single volume hue
-const SEVERE = "#f87171"; // red-400 — status only
+const SERIES = "#ef4444"; // emergency-500 — the single volume hue
+const SEVERE = "#fbbf24"; // amber-400 — severity, kept off the crimson ramp
 const TRACK = "rgba(148, 163, 184, 0.14)";
 const RULE = "rgba(148, 163, 184, 0.18)";
 
@@ -43,7 +43,7 @@ export const StatTile: React.FC<StatTileProps> = ({
       ? "text-red-400"
       : tone === "good"
       ? "text-emerald-400"
-      : "text-sky-300";
+      : "text-slate-200";
 
   const subTone =
     tone === "alert"

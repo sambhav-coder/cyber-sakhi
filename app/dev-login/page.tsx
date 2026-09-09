@@ -112,7 +112,7 @@ export default function DevLoginPage() {
                 className={`text-[10px] px-2 py-0.5 rounded-full font-bold uppercase border ${
                   persona.role === "ADMIN"
                     ? "bg-emergency-950/70 text-emergency-300 border-emergency-700/50"
-                    : "bg-sky-950/70 text-sky-300 border-sky-700/50"
+                    : "bg-slate-800/70 text-slate-200 border-slate-600/50"
                 }`}
               >
                 {persona.role}

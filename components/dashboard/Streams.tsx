@@ -22,7 +22,7 @@ const KIND_META: Record<
     label: "Message Screened",
   },
   EVIDENCE: {
-    icon: <Lock className="w-3.5 h-3.5 text-sky-400" />,
+    icon: <Lock className="w-3.5 h-3.5 text-emergency-400" />,
     label: "Evidence Vaulted",
   },
   SOS: {

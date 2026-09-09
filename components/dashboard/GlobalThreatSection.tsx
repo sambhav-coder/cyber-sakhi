@@ -19,7 +19,7 @@ import {
 import { relativeTime } from "@/lib/safetyScore";
 import { WorldThreatMap } from "./WorldThreatMap";
 
-const SERIES = "#38bdf8";
+const SERIES = "#ef4444";
 const TRACK = "rgba(148, 163, 184, 0.14)";
 
 export const GlobalThreatSection: React.FC = () => {
@@ -151,7 +151,7 @@ export const GlobalThreatSection: React.FC = () => {
           {
             label: "Online Population",
             value: `${(snapshot.totals.onlineUsersMillions / 1000).toFixed(2)}B`,
-            icon: <Users className="w-4 h-4 text-sky-400" />,
+            icon: <Users className="w-4 h-4 text-emergency-400" />,
           },
           {
             label: "Rated Severe",
@@ -167,7 +167,7 @@ export const GlobalThreatSection: React.FC = () => {
               <span>{tile.label}</span>
               {tile.icon}
             </div>
-            <div className="text-xl font-black text-sky-300 font-mono">
+            <div className="text-xl font-black text-slate-200 font-mono">
               {tile.value}
             </div>
           </div>
