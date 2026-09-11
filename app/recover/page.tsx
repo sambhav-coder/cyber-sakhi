@@ -1,6 +1,6 @@
 "use client";
 
-import React, { useEffect, useState, Suspense } from "react";
+import React, { useEffect, useRef, useState, Suspense } from "react";
 import Link from "next/link";
 import { useRouter, useSearchParams } from "next/navigation";
 import { getSession, signOut } from "next-auth/react";
@@ -12,9 +12,10 @@ import {
   KeyRound,
   Copy,
   Check,
+  ExternalLink,
+  Link2,
   Fingerprint,
   Loader2,
-  Lock,
   UserCheck,
   LayoutDashboard,
   LogOut,
@@ -47,31 +48,41 @@ function RecoverFlow() {
     };
   }, []);
 
+  // Step 1 — generate a recovery link from a registered email.
   const [email, setEmail] = useState("");
   const [emailError, setEmailError] = useState<string | null>(null);
   const [isSending, setIsSending] = useState(false);
-  const [sentEmail, setSentEmail] = useState<string | null>(null);
-  const [devLink, setDevLink] = useState<string | null>(null);
+  const [sentMessage, setSentMessage] = useState<string | null>(null);
+  const [recoveryLink, setRecoveryLink] = useState<string | null>(null);
+  const [linkCopied, setLinkCopied] = useState(false);
 
+  // Step 2 — open the link, verify the token, and recover credentials.
   const [token, setToken] = useState<string | null>(urlToken);
   const [isVerifying, setIsVerifying] = useState(Boolean(urlToken));
   const [lookupError, setLookupError] = useState<string | null>(null);
-  const [sakhiNumber, setSakhiNumber] = useState<string | null>(null);
 
-  const [newPassword, setNewPassword] = useState("");
-  const [confirmPassword, setConfirmPassword] = useState("");
-  const [resetError, setResetError] = useState<string | null>(null);
-  const [isResetting, setIsResetting] = useState(false);
-  const [resetSuccess, setResetSuccess] = useState(false);
-  const [copyState, setCopyState] = useState<"idle" | "copied">("idle");
+  const [isRecovering, setIsRecovering] = useState(false);
+  const [recoveryError, setRecoveryError] = useState<string | null>(null);
+  const [sakhiNumber, setSakhiNumber] = useState<string | null>(null);
+  const [temporaryPassword, setTemporaryPassword] = useState<string | null>(null);
+  const [sakhiCopied, setSakhiCopied] = useState(false);
+  const [pwCopied, setPwCopied] = useState(false);
+
+  // Guard so StrictMode/remounts never fire the token-consuming reset twice.
+  const handledTokenRef = useRef<string | null>(null);
 
   useEffect(() => {
     if (!urlToken) return;
+    if (handledTokenRef.current === urlToken) return;
+    handledTokenRef.current = urlToken;
+
     setToken(urlToken);
     setLookupError(null);
+    setRecoveryError(null);
     setSakhiNumber(null);
-    setResetSuccess(false);
+    setTemporaryPassword(null);
 
+    let cancelled = false;
     const verify = async () => {
       setIsVerifying(true);
       try {
@@ -81,25 +92,68 @@ function RecoverFlow() {
           body: JSON.stringify({ token: urlToken }),
         });
         const data = await res.json();
+        if (cancelled) return;
+
         if (!res.ok) {
           setLookupError(data.error || "This recovery link is invalid or has expired.");
+          return;
+        }
+
+        setSakhiNumber(data.sakhiNumber);
+
+        // Valid link: the server generates a temporary password now and hands
+        // it back exactly once through the same one-time channel used by signup.
+        setIsRecovering(true);
+        const resetRes = await fetch("/api/auth/recover/reset", {
+          method: "POST",
+          headers: { "Content-Type": "application/json" },
+          body: JSON.stringify({ token: urlToken }),
+        });
+        const resetData = await resetRes.json();
+        if (cancelled) return;
+
+        if (!resetRes.ok || !resetData?.token) {
+          setRecoveryError(
+            resetData?.error ||
+              "Your credentials could not be recovered. Please request a new recovery link."
+          );
+          return;
+        }
+
+        const credRes = await fetch(
+          `/api/auth/onetime?token=${encodeURIComponent(resetData.token)}`
+        );
+        const cred = await credRes.json();
+        if (cancelled) return;
+
+        if (credRes.ok && cred?.generatedPassword) {
+          setSakhiNumber(cred.sakhiNumber || resetData.sakhiNumber);
+          setTemporaryPassword(cred.generatedPassword);
         } else {
-          setSakhiNumber(data.sakhiNumber);
+          setRecoveryError(
+            "Your password was reset, but it could not be displayed. Request a new recovery link."
+          );
         }
       } catch {
-        setLookupError("Something went wrong. Please try again.");
+        if (!cancelled) setLookupError("Something went wrong. Please try again.");
       } finally {
-        setIsVerifying(false);
+        if (!cancelled) {
+          setIsVerifying(false);
+          setIsRecovering(false);
+        }
       }
     };
     verify();
+    return () => {
+      cancelled = true;
+    };
   }, [urlToken]);
 
   const handleRequest = async (e: React.FormEvent) => {
     e.preventDefault();
     setEmailError(null);
-    setSentEmail(null);
-    setDevLink(null);
+    setSentMessage(null);
+    setRecoveryLink(null);
 
     if (alreadyLoggedIn) {
       setEmailError(
@@ -124,8 +178,8 @@ function RecoverFlow() {
       if (!res.ok) {
         setEmailError(data.error || "Something went wrong. Please try again.");
       } else {
-        setSentEmail(data.message);
-        setDevLink(data.devLink || null);
+        setSentMessage(data.message || null);
+        setRecoveryLink(data.recoveryLink || null);
       }
     } catch {
       setEmailError("Something went wrong. Please try again.");
@@ -134,44 +188,25 @@ function RecoverFlow() {
     }
   };
 
-  const handleReset = async (e: React.FormEvent) => {
-    e.preventDefault();
-    setResetError(null);
-
-    if (!newPassword || !confirmPassword) {
-      setResetError("All fields are required.");
-      return;
-    }
-    if (newPassword !== confirmPassword) {
-      setResetError("New passwords do not match.");
-      return;
-    }
-
-    setIsResetting(true);
-    try {
-      const res = await fetch("/api/auth/recover/reset", {
-        method: "POST",
-        headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({ token, newPassword }),
-      });
-      const data = await res.json();
-      if (!res.ok) {
-        setResetError(data.error || "Something went wrong. Please try again.");
-      } else {
-        setResetSuccess(true);
-      }
-    } catch {
-      setResetError("Something went wrong. Please try again.");
-    } finally {
-      setIsResetting(false);
-    }
+  const copyLink = () => {
+    if (!recoveryLink) return;
+    navigator.clipboard?.writeText(recoveryLink).catch(() => {});
+    setLinkCopied(true);
+    setTimeout(() => setLinkCopied(false), 1800);
   };
 
   const copySakhi = () => {
     if (!sakhiNumber) return;
     navigator.clipboard?.writeText(sakhiNumber).catch(() => {});
-    setCopyState("copied");
-    setTimeout(() => setCopyState("idle"), 1800);
+    setSakhiCopied(true);
+    setTimeout(() => setSakhiCopied(false), 1800);
+  };
+
+  const copyPassword = () => {
+    if (!temporaryPassword) return;
+    navigator.clipboard?.writeText(temporaryPassword).catch(() => {});
+    setPwCopied(true);
+    setTimeout(() => setPwCopied(false), 1800);
   };
 
   if (authCheckDone && alreadyLoggedIn && !urlToken) {
@@ -261,6 +296,8 @@ function RecoverFlow() {
     );
   }
 
+  const recovered = temporaryPassword && sakhiNumber;
+
   return (
     <div className="min-h-screen w-full relative flex items-center justify-center px-4 sm:px-6 py-10 overflow-hidden">
       {/* Ambient bg (same visual language as the login page) */}
@@ -315,7 +352,8 @@ function RecoverFlow() {
             <span className="text-crimson-gradient">Cyber Sakhi</span>
           </h1>
           <p className="text-xs sm:text-sm text-slate-400 leading-relaxed max-w-xs mx-auto">
-            Recover your Sakhi Number and set a new password using your registered email.
+            Recover your Sakhi Number and get a new temporary password using your
+            registered email.
           </p>
         </div>
 
@@ -328,18 +366,82 @@ function RecoverFlow() {
               "0 30px 80px -40px rgba(0,0,0,0.9), 0 0 60px -30px rgba(220, 38, 38, 0.35)",
           }}
         >
-          {resetSuccess ? (
-            /* Success state */
-            <div className="space-y-5 text-center">
-              <div className="flex justify-center">
-                <ShieldCheck className="w-12 h-12 text-emerald-400" />
+          {recovered ? (
+            /* Success: show Sakhi Number + temporary password (shown once) */
+            <div className="space-y-5">
+              <div className="space-y-1.5">
+                <label className="font-bold text-slate-200 tracking-wide flex items-center gap-1.5 text-xs">
+                  <Fingerprint className="w-3.5 h-3.5 text-emergency-400" />
+                  Your Sakhi Number
+                </label>
+                <div className="relative">
+                  <input
+                    type="text"
+                    readOnly
+                    value={sakhiNumber || ""}
+                    className="w-full rounded-xl bg-black/50 border border-slate-700/80 pl-11 pr-24 py-3 text-sm text-white focus:outline-none"
+                  />
+                  <Fingerprint className="w-4 h-4 absolute left-3.5 top-3.5 text-slate-500" />
+                  <button
+                    type="button"
+                    onClick={copySakhi}
+                    className="absolute right-2 top-1/2 -translate-y-1/2 flex items-center gap-1.5 text-[11px] text-emergency-300 hover:text-emergency-200 transition-colors px-2.5 py-1.5 rounded-lg border border-emergency-600/40"
+                  >
+                    {sakhiCopied ? (
+                      <Check className="w-3 h-3 text-emerald-400" />
+                    ) : (
+                      <Copy className="w-3 h-3" />
+                    )}
+                    {sakhiCopied ? "Copied" : "Copy"}
+                  </button>
+                </div>
               </div>
-              <div className="p-3.5 rounded-xl bg-emerald-950/80 border border-emerald-500/40 text-emerald-200 text-xs flex items-center gap-2">
-                <Check className="w-4 h-4 text-emerald-400 shrink-0" />
-                <span>
-                  Your credentials have been recovered. You can now sign in using your Sakhi Number and new password.
-                </span>
+
+              <div className="space-y-1.5">
+                <label className="font-bold text-slate-200 tracking-wide flex items-center gap-1.5 text-xs">
+                  <KeyRound className="w-3.5 h-3.5 text-emergency-400" />
+                  Temporary Password
+                </label>
+                <div className="relative">
+                  <input
+                    type="text"
+                    readOnly
+                    value={temporaryPassword || ""}
+                    className="w-full rounded-xl bg-black/50 border border-emerald-600/50 pl-11 pr-24 py-3 text-sm text-white font-mono focus:outline-none"
+                  />
+                  <KeyRound className="w-4 h-4 absolute left-3.5 top-3.5 text-emerald-500" />
+                  <button
+                    type="button"
+                    onClick={copyPassword}
+                    className="absolute right-2 top-1/2 -translate-y-1/2 flex items-center gap-1.5 text-[11px] text-emergency-300 hover:text-emergency-200 transition-colors px-2.5 py-1.5 rounded-lg border border-emergency-600/40"
+                  >
+                    {pwCopied ? (
+                      <Check className="w-3 h-3 text-emerald-400" />
+                    ) : (
+                      <Copy className="w-3 h-3" />
+                    )}
+                    {pwCopied ? "Copied" : "Copy"}
+                  </button>
+                </div>
+                <p className="text-[10px] text-slate-500 pl-0.5 tracking-wide">
+                  This temporary password is generated securely and is shown only once.
+                </p>
               </div>
+
+              <div
+                className="p-3.5 rounded-xl flex gap-2.5 items-start"
+                style={{
+                  background: "rgba(220, 38, 38, 0.12)",
+                  border: "1px solid rgba(248, 113, 113, 0.3)",
+                }}
+              >
+                <ShieldCheck className="w-4 h-4 text-emerald-400 shrink-0 mt-0.5" />
+                <div className="text-[11px] text-slate-300 leading-relaxed">
+                  Sign in with your Sakhi Number and this temporary password, then
+                  change it to your own password right away from the Change Password screen.
+                </div>
+              </div>
+
               <Link
                 href="/login"
                 className="w-full py-3.5 px-4 rounded-xl text-white font-bold tracking-wide text-sm transition flex items-center justify-center gap-2"
@@ -354,157 +456,100 @@ function RecoverFlow() {
                 <ArrowRight className="w-4 h-4" />
               </Link>
             </div>
-          ) : isVerifying ? (
-            /* Verifying recovery token */
+          ) : isVerifying || isRecovering ? (
+            /* Verifying recovery token / generating credentials */
             <div className="flex flex-col items-center justify-center gap-3 py-8">
               <Loader2 className="w-6 h-6 text-emergency-400 animate-spin" />
-              <p className="text-xs text-slate-400">Verifying your recovery link...</p>
+              <p className="text-xs text-slate-400">
+                {isVerifying
+                  ? "Verifying your recovery link..."
+                  : "Generating your secure temporary password..."}
+              </p>
             </div>
-          ) : lookupError ? (
-            /* Token lookup failed */
+          ) : lookupError || recoveryError ? (
+            /* Token lookup / recovery failed */
             <div className="space-y-4">
               <div className="p-3.5 rounded-xl bg-red-950/80 border border-red-500/50 text-red-200 text-xs flex items-center gap-2">
                 <AlertCircle className="w-4 h-4 text-red-400 shrink-0" />
-                <span>{lookupError}</span>
+                <span>{lookupError || recoveryError}</span>
               </div>
               <Link
                 href="/recover"
                 onClick={() => {
                   setLookupError(null);
+                  setRecoveryError(null);
                   setToken(null);
+                  setSakhiNumber(null);
                 }}
                 className="text-xs text-emergency-400 hover:text-emergency-300 font-bold tracking-wide underline decoration-emergency-500/40 underline-offset-4"
               >
                 Request a new recovery link
               </Link>
             </div>
-          ) : sakhiNumber ? (
-            /* Verified: show Sakhi Number + set new password */
-            <div className="space-y-5">
-              <div className="space-y-1.5">
-                <label className="font-bold text-slate-200 tracking-wide flex items-center gap-1.5 text-xs">
-                  <Fingerprint className="w-3.5 h-3.5 text-emergency-400" />
-                  Your Sakhi Number
-                </label>
-                <div className="relative">
-                  <input
-                    type="text"
-                    readOnly
-                    value={sakhiNumber}
-                    className="w-full rounded-xl bg-black/50 border border-slate-700/80 pl-11 pr-24 py-3 text-sm text-white focus:outline-none"
-                  />
-                  <Fingerprint className="w-4 h-4 absolute left-3.5 top-3.5 text-slate-500" />
-                  <button
-                    type="button"
-                    onClick={copySakhi}
-                    className="absolute right-2 top-1/2 -translate-y-1/2 flex items-center gap-1.5 text-[11px] text-emergency-300 hover:text-emergency-200 transition-colors px-2.5 py-1.5 rounded-lg border border-emergency-600/40"
-                  >
-                    {copyState === "copied" ? (
-                      <Check className="w-3 h-3 text-emerald-400" />
-                    ) : (
-                      <Copy className="w-3 h-3" />
-                    )}
-                    {copyState === "copied" ? "Copied" : "Copy"}
-                  </button>
-                </div>
-                <p className="text-[10px] text-slate-500 pl-0.5 tracking-wide">
-                  Use this Sakhi Number with your new password to sign in.
-                </p>
-              </div>
-
-              <form onSubmit={handleReset} className="space-y-4 text-xs">
-                {resetError && (
-                  <div className="p-3.5 rounded-xl bg-red-950/80 border border-red-500/50 text-red-200 flex items-center gap-2">
-                    <AlertCircle className="w-4 h-4 text-red-400 shrink-0" />
-                    <span>{resetError}</span>
-                  </div>
-                )}
-                <div className="space-y-1.5">
-                  <label className="font-bold text-slate-200 tracking-wide flex items-center gap-1.5">
-                    <Lock className="w-3.5 h-3.5 text-emergency-400" />
-                    New Password
-                  </label>
-                  <input
-                    type="password"
-                    required
-                    autoComplete="new-password"
-                    value={newPassword}
-                    onChange={(e) => setNewPassword(e.target.value)}
-                    placeholder="••••••••"
-                    className="w-full rounded-xl bg-black/50 border border-slate-700/80 px-3.5 py-3 text-sm text-white placeholder:text-slate-500 focus:outline-none focus:border-emergency-500 focus:ring-2 focus:ring-emergency-500/25 transition"
-                  />
-                  <p className="text-[10px] text-slate-500 pl-0.5 tracking-wide">
-                    At least 8 characters with uppercase, lowercase, number &amp; special character.
-                  </p>
-                </div>
-                <div className="space-y-1.5">
-                  <label className="font-bold text-slate-200 tracking-wide flex items-center gap-1.5">
-                    <KeyRound className="w-3.5 h-3.5 text-emergency-400" />
-                    Confirm New Password
-                  </label>
-                  <input
-                    type="password"
-                    required
-                    autoComplete="new-password"
-                    value={confirmPassword}
-                    onChange={(e) => setConfirmPassword(e.target.value)}
-                    placeholder="••••••••"
-                    className="w-full rounded-xl bg-black/50 border border-slate-700/80 px-3.5 py-3 text-sm text-white placeholder:text-slate-500 focus:outline-none focus:border-emergency-500 focus:ring-2 focus:ring-emergency-500/25 transition"
-                  />
-                </div>
-                <button
-                  type="submit"
-                  disabled={isResetting || !newPassword || !confirmPassword}
-                  className="w-full py-3.5 px-4 rounded-xl text-white font-bold tracking-wide text-sm transition flex items-center justify-center gap-2 disabled:opacity-50"
-                  style={{
-                    background:
-                      "linear-gradient(135deg, #b91c1c 0%, #ef4444 50%, #dc2626 100%)",
-                    boxShadow:
-                      "0 15px 40px -12px rgba(220, 38, 38, 0.75), inset 0 1px 0 rgba(255,255,255,0.18)",
-                    clipPath:
-                      "polygon(0 0, 100% 0, 100% calc(100% - 9px), calc(100% - 9px) 100%, 0 100%)",
-                  }}
-                >
-                  {isResetting ? (
-                    <span className="flex items-center gap-2">
-                      <span className="w-3.5 h-3.5 border-2 border-white/40 border-t-white rounded-full animate-spin" />
-                      Saving new password...
-                    </span>
-                  ) : (
-                    <>Save Password</>
-                  )}
-                </button>
-              </form>
-            </div>
           ) : (
             /* Email request step */
             <div className="space-y-5">
-              {sentEmail ? (
+              {sentMessage && recoveryLink ? (
                 <div className="space-y-4">
                   <div className="p-3.5 rounded-xl bg-emerald-950/80 border border-emerald-500/40 text-emerald-200 text-xs flex items-start gap-2">
                     <Check className="w-4 h-4 text-emerald-400 shrink-0 mt-0.5" />
-                    <span>{sentEmail}</span>
+                    <span>{sentMessage}</span>
                   </div>
-                  {devLink && (
-                    <div className="space-y-1.5">
-                      <p className="text-[10px] text-slate-500 tracking-wide">
-                        Development build — email delivery is not configured. Use this local
-                        recovery link to continue (this is never shown in production):
-                      </p>
-                      <Link
-                        href={devLink}
-                        className="text-[11px] text-emergency-300 hover:text-emergency-200 font-semibold tracking-wide underline decoration-emergency-500/40 underline-offset-4 break-all"
+
+                  <div className="space-y-1.5">
+                    <label className="font-bold text-slate-200 tracking-wide flex items-center gap-1.5 text-xs">
+                      <Link2 className="w-3.5 h-3.5 text-emergency-400" />
+                      Your Recovery Link
+                    </label>
+                    <div className="relative">
+                      <input
+                        type="text"
+                        readOnly
+                        value={recoveryLink}
+                        className="w-full rounded-xl bg-black/50 border border-slate-700/80 pl-11 pr-24 py-3 text-[11px] text-white break-all focus:outline-none"
+                      />
+                      <Link2 className="w-4 h-4 absolute left-3.5 top-3.5 text-slate-500" />
+                      <button
+                        type="button"
+                        onClick={copyLink}
+                        className="absolute right-2 top-1/2 -translate-y-1/2 flex items-center gap-1.5 text-[11px] text-emergency-300 hover:text-emergency-200 transition-colors px-2.5 py-1.5 rounded-lg border border-emergency-600/40"
                       >
-                        {devLink}
-                      </Link>
+                        {linkCopied ? (
+                          <Check className="w-3 h-3 text-emerald-400" />
+                        ) : (
+                          <Copy className="w-3 h-3" />
+                        )}
+                        {linkCopied ? "Copied" : "Copy Link"}
+                      </button>
                     </div>
-                  )}
+                    <p className="text-[10px] text-slate-500 pl-0.5 tracking-wide">
+                      This link expires in 15 minutes and can only be used once.
+                    </p>
+                  </div>
+
+                  <button
+                    type="button"
+                    onClick={() => router.push(recoveryLink)}
+                    className="w-full py-3.5 px-4 rounded-xl text-white font-bold tracking-wide text-sm transition flex items-center justify-center gap-2"
+                    style={{
+                      background:
+                        "linear-gradient(135deg, #b91c1c 0%, #ef4444 50%, #dc2626 100%)",
+                      boxShadow:
+                        "0 15px 40px -12px rgba(220, 38, 38, 0.75), inset 0 1px 0 rgba(255,255,255,0.18)",
+                      clipPath:
+                        "polygon(0 0, 100% 0, 100% calc(100% - 9px), calc(100% - 9px) 100%, 0 100%)",
+                    }}
+                  >
+                    <ExternalLink className="w-4 h-4" />
+                    Open Recovery Link
+                  </button>
+
                   <div className="text-center pt-1">
                     <button
                       type="button"
                       onClick={() => {
-                        setSentEmail(null);
-                        setDevLink(null);
+                        setSentMessage(null);
+                        setRecoveryLink(null);
                         setEmail("");
                       }}
                       className="text-[11px] text-slate-400 hover:text-emergency-300 transition-colors tracking-wide"
@@ -552,11 +597,11 @@ function RecoverFlow() {
                     {isSending ? (
                       <span className="flex items-center gap-2">
                         <span className="w-3.5 h-3.5 border-2 border-white/40 border-t-white rounded-full animate-spin" />
-                        Sending recovery link...
+                        Generating recovery link...
                       </span>
                     ) : (
                       <>
-                        <span>Send Recovery Link</span>
+                        <span>Generate Recovery Link</span>
                         <ArrowRight className="w-4 h-4" />
                       </>
                     )}
@@ -574,7 +619,7 @@ function RecoverFlow() {
                 <ShieldCheck className="w-4 h-4 text-emerald-400 shrink-0 mt-0.5" />
                 <div className="text-[10.5px] text-slate-400 leading-relaxed">
                   Your password can never be recovered — it is stored only as a secure hash.
-                  Recovery lets you set a NEW password. Your Sakhi Number and data stay unchanged.
+                  Recovery gives you a NEW temporary password. Your Sakhi Number and data stay unchanged.
                 </div>
               </div>
             </div>

@@ -5,15 +5,12 @@ import { findProfileByEmail } from "@/lib/db/profiles";
 import {
   createRecoveryToken,
   consumeRecoveryToken,
+  generateRecoveryToken,
+  RECOVERY_TOKEN_TTL_MS,
 } from "@/lib/recoveryTokens";
-import {
-  isEmailConfigured,
-  missingEmailConfig,
-  sendRecoveryEmail,
-} from "@/lib/mailer";
 
 const GENERIC_MESSAGE =
-  "If an account exists for this email, recovery instructions have been sent.";
+  "A recovery link has been generated below. It expires in 15 minutes and can only be used once.";
 
 const EMAIL_REGEX = /^[^\s@]+@[^\s@]+\.[^\s@]+$/;
 
@@ -45,60 +42,28 @@ export async function POST(req: NextRequest) {
       return NextResponse.json({ error: "Enter a valid email address." }, { status: 400 });
     }
 
-    // Production must have a real email transport. Check BEFORE the profile
-    // lookup so a misconfigured deployment returns the SAME error for every
-    // email address (no account-existence leak) instead of silently pretending
-    // recovery instructions were sent. In development the devLink is sufficient.
-    if (process.env.NODE_ENV === "production" && !isEmailConfigured()) {
-      const missing = missingEmailConfig();
-      return NextResponse.json(
-        {
-          error: `Recovery email could not be sent because the email provider is not configured. Missing environment variables: ${missing.join(", ")}.`,
-        },
-        { status: 503 }
-      );
-    }
-
+    const origin = req.nextUrl.origin;
     const profile = await findProfileByEmail(email);
 
     // Anti-enumeration: identical response whether or not the account exists.
+    // Unknown emails receive a decoy link whose token was never persisted, so
+    // a requester cannot distinguish existing from non-existing accounts.
     if (!profile) {
-      return NextResponse.json({ message: GENERIC_MESSAGE });
+      const decoyToken = generateRecoveryToken();
+      return NextResponse.json({
+        message: GENERIC_MESSAGE,
+        recoveryLink: `${origin}/recover?token=${encodeURIComponent(decoyToken)}`,
+        expiresAt: new Date(Date.now() + RECOVERY_TOKEN_TTL_MS).toISOString(),
+      });
     }
 
     // Invalidate any prior unused tokens so only the latest link works.
     await consumeRecoveryToken(profile.id);
 
-    const { token } = await createRecoveryToken(profile.id);
-    const origin = req.nextUrl.origin;
+    const { token, expiresAt } = await createRecoveryToken(profile.id);
     const recoveryLink = `${origin}/recover?token=${encodeURIComponent(token)}`;
 
-    // Development convenience: surface the recovery link to the local UI so
-    // the reset flow can be exercised without a real inbox. Production never
-    // returns the link — the email is the only channel.
-    if (process.env.NODE_ENV !== "production") {
-      return NextResponse.json({
-        message: GENERIC_MESSAGE,
-        devLink: recoveryLink,
-      });
-    }
-
-    // Production: the transport is already guaranteed configured above.
-    const sendResult = await sendRecoveryEmail({
-      to: profile.email,
-      name: profile.name,
-      recoveryLink,
-    });
-
-    if (!sendResult.ok) {
-      console.error("[recover] Email send failed:", sendResult.error);
-      return NextResponse.json(
-        { error: "The recovery email could not be delivered. Please try again later." },
-        { status: 502 }
-      );
-    }
-
-    return NextResponse.json({ message: GENERIC_MESSAGE });
+    return NextResponse.json({ message: GENERIC_MESSAGE, recoveryLink, expiresAt });
   } catch (error) {
     console.error("Recovery request error:", error);
     return NextResponse.json(
