@@ -2,6 +2,7 @@
 
 import React, { useState, useEffect } from "react";
 import Link from "next/link";
+import { CyberSafetyBriefingModal } from "@/components/CyberSafetyBriefingModal";
 import {
   Lock,
   Shield,
@@ -199,6 +200,7 @@ export default function HomePage() {
   const [currentBgIndex, setCurrentBgIndex] = useState(0);
   const [mounted, setMounted] = useState(false);
   const [copied, setCopied] = useState<string | null>(null);
+  const [isBriefingOpen, setIsBriefingOpen] = useState(false);
 
   useEffect(() => {
     setMounted(true);
@@ -281,10 +283,10 @@ export default function HomePage() {
       {/* =========================================================
           HERO SECTION — 100VH FULL SCREEN
           ========================================================= */}
-      <section className="relative z-10 flex flex-col items-center justify-center min-h-screen w-full px-4 sm:px-6 py-20 text-center">
+      <section className="relative z-10 flex flex-col items-center justify-center min-h-[100svh] w-full px-4 sm:px-6 pt-16 sm:pt-20 pb-24 sm:pb-32 text-center">
         {/* Logo */}
         <div
-          className={`mb-7 sm:mb-10 transition-all duration-1000 ease-out ${
+          className={`mb-6 sm:mb-9 transition-all duration-1000 ease-out ${
             mounted ? "opacity-100 translate-y-0" : "opacity-0 translate-y-12"
           }`}
           style={{ transitionDelay: "80ms" }}
@@ -352,14 +354,16 @@ export default function HomePage() {
 
         {/* Primary CTA */}
         <div
-          className={`mt-10 sm:mt-12 transition-all duration-1000 ease-out ${
+          className={`mt-8 sm:mt-10 transition-all duration-1000 ease-out ${
             mounted ? "opacity-100 translate-y-0" : "opacity-0 translate-y-10"
           }`}
           style={{ transitionDelay: "640ms" }}
         >
-          <Link
-            href="#cybercrime-cases"
-            className="group relative inline-flex items-center gap-3 px-7 sm:px-8 py-3.5 sm:py-4 rounded-xl font-bold tracking-wide text-sm sm:text-base overflow-hidden"
+          <button
+            type="button"
+            onClick={() => setIsBriefingOpen(true)}
+            aria-haspopup="dialog"
+            className="group relative inline-flex items-center gap-3 px-7 sm:px-8 py-3.5 sm:py-4 rounded-xl font-bold tracking-wide text-sm sm:text-base overflow-hidden cursor-pointer"
             style={{
               background:
                 "linear-gradient(135deg, #b91c1c 0%, #ef4444 45%, #dc2626 75%, #7f1d1d 100%)",
@@ -372,12 +376,12 @@ export default function HomePage() {
             <ShieldCheck className="w-5 h-5" />
             <span>Learn How to Protect Yourself</span>
             <ChevronRight className="w-5 h-5 transition-transform group-hover:translate-x-1" />
-          </Link>
+          </button>
         </div>
 
         {/* Auth Buttons */}
         <div
-          className={`mt-12 sm:mt-16 flex flex-col sm:flex-row gap-5 sm:gap-8 justify-center items-center transition-all duration-1000 ease-out ${
+          className={`mt-10 sm:mt-14 flex flex-col sm:flex-row gap-5 sm:gap-8 justify-center items-center transition-all duration-1000 ease-out ${
             mounted ? "opacity-100 translate-y-0" : "opacity-0 translate-y-10"
           }`}
           style={{ transitionDelay: "820ms" }}
@@ -425,7 +429,7 @@ export default function HomePage() {
 
         {/* Scroll-down indicator */}
         <div
-          className={`absolute bottom-8 left-1/2 -translate-x-1/2 flex flex-col items-center gap-2 text-slate-400/70 transition-all duration-1000 ${
+          className={`absolute bottom-6 sm:bottom-8 left-1/2 -translate-x-1/2 flex flex-col items-center gap-2 text-slate-400/70 transition-all duration-1000 ${
             mounted ? "opacity-100" : "opacity-0"
           }`}
           style={{ transitionDelay: "1200ms" }}
@@ -808,6 +812,12 @@ export default function HomePage() {
           </div>
         </div>
       </footer>
+
+      {/* Cyber Safety Briefing modal */}
+      <CyberSafetyBriefingModal
+        isOpen={isBriefingOpen}
+        onClose={() => setIsBriefingOpen(false)}
+      />
 
       {/* Global brand pulse-glow keyframes (shared) */}
       <style jsx global>{`
