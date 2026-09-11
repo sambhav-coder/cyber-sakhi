@@ -21,6 +21,7 @@ import {
   FileText,
 } from "lucide-react";
 import { ThreatBadge } from "@/components/ThreatBadge";
+import { OffenderNetworkPanel } from "@/components/OffenderNetworkPanel";
 import { analyzeMessage } from "@/lib/threatEngine";
 import { ThreatAnalysisResult, EvidenceItem } from "@/lib/types";
 import { addEvidenceItem, addScanHistoryItem, getStoredScanHistory } from "@/lib/storage";
@@ -413,6 +414,23 @@ function DetectorContent() {
                     ))}
                   </ul>
                 </div>
+
+                {/* Sakhi Network: has anyone else reported these identifiers? */}
+                <OffenderNetworkPanel
+                  key={result.id}
+                  text={result.text}
+                  category={
+                    result.riskFactors.blackmail > 0
+                      ? "BLACKMAIL"
+                      : result.riskFactors.stalking > 0
+                      ? "STALKING"
+                      : result.riskFactors.financialScam > 0
+                      ? "SCAM"
+                      : result.threatLevel === "SAFE"
+                      ? "OTHER"
+                      : "HARASSMENT"
+                  }
+                />
 
                 {/* Direct Action Buttons */}
                 <div className="space-y-2 pt-2 border-t border-purple-900/40">
