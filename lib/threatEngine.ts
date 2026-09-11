@@ -49,7 +49,7 @@ const RULES: RulePattern[] = [
   {
     category: "Cyberstalking & Intimidation",
     weight: 50,
-    regex: /(kill\s+you|murder|acid|beat\s+you|hurt\s+you|slap|break\s+your\s+face|die)/i,
+    regex: /(kill\s+you|murder|\bacid\b|beat\s+you|hurt\s+you|\bslap\b|break\s+your\s+face|\bdie\b)/i,
     triggerName: "Direct violence/bodily harm threat",
   },
   // Sexual Harassment
@@ -62,7 +62,7 @@ const RULES: RulePattern[] = [
   {
     category: "Sexual Harassment",
     weight: 35,
-    regex: /(sleep\s+with\s+me|have\s+sex|be\s+my\s+mistress|do\s+dirty\s+things|breast|boobs|ass)/i,
+    regex: /(sleep\s+with\s+me|have\s+sex|be\s+my\s+mistress|do\s+dirty\s+things|\bbreasts?\b|\bboobs\b|\bass\b)/i,
     triggerName: "Sexually explicit solicitation",
   },
   // Doxxing & Privacy Violation
@@ -86,11 +86,94 @@ const RULES: RulePattern[] = [
     regex: /(slut|bitch|whore|worthless|trash|disgusting|ugly\s+pig|kill\s+yourself)/i,
     triggerName: "Severe derogatory / abusive slurs",
   },
+
+  {
+    category: "Extortion & Blackmail",
+    weight: 40,
+    regex: /((send|pay|transfer|deposit|give)\s+(me\s+)?(rs\.?|inr|rupees?)\s*[\d,]{3,}|(send|pay|transfer|deposit|give)\s+(me\s+)?[\d,]{3,}\s*(rs\.?|inr|rupees?))/i,
+    triggerName: "Specific ransom amount demanded",
+  },
+  {
+    category: "Extortion & Blackmail",
+    weight: 45,
+    regex: /(leak|expose|post|share|send|upload)\s+(them|it|these|those|this)\s+(to|with|on)\s+(everyone|all|your|the\s+whole|social)/i,
+    triggerName: "Threat to distribute private media",
+  },
+  // ---------------------------------------------------------------------
+  // Hindi / Hinglish coverage
+  //
+  // The rules above are English-only, so "paise bhej warna photo leak kar
+  // dunga" scored SAFE. Indian harassment is overwhelmingly written in
+  // romanised Hindi, so these mirror the categories above in Hinglish and
+  // Devanagari. Spelling is deliberately loose: kar dunga / kardunga /
+  // kr dunga, photo / foto, paise / paisa / rupaye all have to match.
+  // ---------------------------------------------------------------------
+  {
+    category: "Extortion & Blackmail",
+    weight: 45,
+    regex: /((photo|foto|pic|video|clip|mms|reel)s?\s*(ko\s*)?(sab\s*ko\s*)?(leak|viral|public|share)\s*(kar\s*)?(d|k)un?ga|(फ़?ोटो|वीडियो|तस्वीर).{0,12}(लीक|वायरल|शेयर))/i,
+    triggerName: "Threat to leak private media (Hinglish)",
+  },
+  {
+    category: "Extortion & Blackmail",
+    weight: 40,
+    regex: /((paise|paisa|paisay|rupay|rupaye|rupees)\s*\d*\s*(bhej|de\s*do|dedo|daal|transfer|bhejo)|\d{3,}\s*(rupay|rupaye|rs)\s*(bhej|do)|पैसे?\s*(भेज|दे\s*दो)|रुपये?\s*भेज)/i,
+    triggerName: "Money demand under threat (Hinglish)",
+  },
+  {
+    category: "Extortion & Blackmail",
+    weight: 40,
+    regex: /((badnaam|besti|beizzat|izzat\s*(kharab|barbaad))\s*(kar\s*)?(d|k)un?ga|(papa|mummy|bhai|ghar\s*walo?n?|family)\s*ko\s*bata\s*(d|k)un?ga|(बदनाम|बेइज़्ज़त).{0,10}(कर|दूंगा)|घर\s*वालो.{0,8}बता)/i,
+    triggerName: "Reputational blackmail (Hinglish)",
+  },
+  {
+    category: "Extortion & Blackmail",
+    weight: 35,
+    regex: /(otp\s*(bhej|batao?|de\s*do|dedo|share\s*kar)|otp\s*kya\s*hai|ओटीपी\s*(भेज|बता))/i,
+    triggerName: "OTP coercion (Hinglish)",
+  },
+  {
+    category: "Cyberstalking & Intimidation",
+    weight: 45,
+    regex: /((ghar|college|office|hostel|building)\s*ke\s*(bahar|bahaar|paas|niche)|tumhara\s*(address|pata|ghar)\s*(pata|maloom)\s*hai|(peecha|picha)\s*kar|तुम्हारे?\s*घर\s*के\s*बाहर|पीछा\s*कर)/i,
+    triggerName: "Physical tracking / location intimidation (Hinglish)",
+  },
+  {
+    category: "Cyberstalking & Intimidation",
+    weight: 40,
+    regex: /(akele?\s*(milo|mil|aana|aa\s*jao|aajao)|akela\s*mil|अकेले\s*(मिलो|आना|आ\s*जाओ))/i,
+    triggerName: "Forced solitary meeting coercion (Hinglish)",
+  },
+  {
+    category: "Cyberstalking & Intimidation",
+    weight: 50,
+    regex: /((jaan\s*se\s*)?(maar|mar)\s*(d|k)un?ga|(tezaab|tejaab|acid)\s*(daal|phenk|maar)|jala\s*(d|k)un?ga|zinda\s*nahi\s*chod|(जान\s*से\s*)?मार\s*दूंगा|तेज़?ाब|जला\s*दूंगा)/i,
+    triggerName: "Direct violence / bodily harm threat (Hinglish)",
+  },
+  {
+    category: "Sexual Harassment",
+    weight: 40,
+    regex: /((nanga|nangi|nangee|gande|ganda|sexy|hot)\s*(photo|foto|pic|video|selfie)|body\s*dikha|kapde\s*utar|(नंगी?|गंदी?)\s*(फ़?ोटो|तस्वीर|वीडियो))/i,
+    triggerName: "Unsolicited sexual media demand (Hinglish)",
+  },
+  {
+    category: "Financial Fraud / Scam",
+    weight: 30,
+    regex: /((kyc|bank|khata|account)\s*(update|band|block|verify)\s*(karo|ho\s*(jayega|gaya)|kar\s*lo)|lottery\s*(jeet|laga|nikli)|(इनाम|लॉटरी|खाता\s*बंद|केवाईसी))/i,
+    triggerName: "Financial / KYC scam lure (Hinglish)",
+  },
+  {
+    category: "Abusive / Hate Speech",
+    weight: 30,
+    regex: /(tujhe\s*chod(unga|na)\s*nahi|nahi\s*chodunga|dekh\s*lunga\s*tujhe|tera\s*kya\s*ukhad|देख\s*लूंगा|नहीं\s*छोड़ूंगा)/i,
+    triggerName: "Intimidating abuse (Hinglish)",
+  },
 ];
 
 const SAFE_PATTERNS = [
   /^(hi|hello|hey|good\s+morning|good\s+evening|how\s+are\s+you|what's\s+up|thank\s+you|see\s+you\s+tomorrow|happy\s+birthday)/i,
   /meeting\s+at|lunch\s+tomorrow|class\s+notes|project\s+submission|homework|coffee/i,
+  /^(namaste|namaskar|kaise\s+ho|kya\s+haal|shukriya|dhanyavaad|theek\s+hai|नमस्ते)/i,
 ];
 
 export function analyzeMessage(text: string): ThreatAnalysisResult {
