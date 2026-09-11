@@ -1,21 +1,66 @@
 "use client";
 
 import React, { useEffect } from "react";
-import { X, Newspaper, ExternalLink, CalendarDays, ShieldCheck } from "lucide-react";
-import { cyberSafetyBriefings } from "@/lib/briefings";
+import { X, ExternalLink } from "lucide-react";
+import {
+  cyberSafetyBriefings,
+  type BriefSourceType,
+  type CyberSafetyBrief,
+} from "@/lib/briefings";
 
 interface CyberSafetyBriefingModalProps {
   isOpen: boolean;
   onClose: () => void;
 }
 
-const tagStyles: Record<string, string> = {
-  Phishing: "bg-emergency-500/15 text-emergency-300 border-emergency-500/30",
-  Blackmail: "bg-amber-500/15 text-amber-300 border-amber-500/30",
-  "Account Takeover": "bg-violet-500/15 text-violet-300 border-violet-500/30",
-  "UPI Fraud": "bg-emerald-500/15 text-emerald-300 border-emerald-500/30",
-  Helpline: "bg-sky-500/15 text-sky-300 border-sky-500/30",
+const sourceTypeLabel: Record<BriefSourceType, string> = {
+  news: "News",
+  government: "Government",
+  advisory: "Advisory",
+  report: "Report",
 };
+
+const editionDate = new Intl.DateTimeFormat("en-GB", {
+  day: "2-digit",
+  month: "long",
+  year: "numeric",
+})
+  .format(new Date())
+  .toUpperCase();
+
+function SourceTypeLabel({ type }: { type: BriefSourceType }) {
+  return (
+    <span className="inline-flex items-center border border-neutral-700 px-1.5 py-px text-[9px] font-semibold uppercase tracking-[0.18em] text-neutral-500">
+      {sourceTypeLabel[type]}
+    </span>
+  );
+}
+
+function MetaRow({ brief }: { brief: CyberSafetyBrief }) {
+  return (
+    <div className="flex flex-wrap items-center gap-x-2 gap-y-1 text-[11px] text-neutral-500">
+      <span className="font-semibold text-neutral-400">{brief.source}</span>
+      <span aria-hidden>·</span>
+      <span>{brief.date}</span>
+      <SourceTypeLabel type={brief.sourceType} />
+    </div>
+  );
+}
+
+function ReadArticle({ brief }: { brief: CyberSafetyBrief }) {
+  if (!brief.url) return null;
+  return (
+    <a
+      href={brief.url}
+      target="_blank"
+      rel="noopener noreferrer"
+      className="group inline-flex items-center gap-1.5 text-[11px] font-semibold uppercase tracking-[0.18em] text-neutral-300 underline underline-offset-4 decoration-neutral-600 hover:text-white hover:decoration-red-400 transition-colors"
+    >
+      Read article
+      <ExternalLink className="w-3.5 h-3.5 transition-transform group-hover:translate-x-0.5 group-hover:-translate-y-0.5" />
+    </a>
+  );
+}
 
 export function CyberSafetyBriefingModal({ isOpen, onClose }: CyberSafetyBriefingModalProps) {
   useEffect(() => {
@@ -33,98 +78,126 @@ export function CyberSafetyBriefingModal({ isOpen, onClose }: CyberSafetyBriefin
 
   if (!isOpen) return null;
 
+  const lead = cyberSafetyBriefings.find((b) => b.lead) ?? cyberSafetyBriefings[0];
+  const secondaries = cyberSafetyBriefings.filter((b) => b !== lead);
+
   return (
     <div
-      className="fixed inset-0 z-50 flex items-center justify-center bg-black/75 backdrop-blur-sm p-4"
+      className="fixed inset-0 z-50 flex items-center justify-center bg-black/80 backdrop-blur-sm p-4 sm:p-6"
       role="dialog"
       aria-modal="true"
       aria-label="Cyber Safety Briefing"
       onClick={onClose}
     >
       <div
-        className="relative w-full max-w-2xl max-h-[85vh] flex flex-col rounded-2xl border border-emergency-700/40 bg-[#0c0c18] shadow-[0_0_80px_rgba(220,38,38,0.15)] overflow-hidden"
+        className="relative w-full max-w-4xl max-h-[92vh] sm:max-h-[86vh] flex flex-col overflow-hidden rounded-lg border border-white/12 bg-[#101014] text-[#e7e6e1] shadow-[0_30px_90px_-25px_rgba(0,0,0,0.95)]"
         onClick={(e) => e.stopPropagation()}
       >
-        {/* Header */}
-        <div className="flex items-center justify-between px-6 pt-6 pb-4 border-b border-white/5">
-          <div>
-            <h3 className="text-base sm:text-lg font-bold text-white flex items-center gap-2.5">
-              <div className="p-1.5 rounded-lg bg-emergency-600/20 border border-emergency-500/30">
-                <Newspaper className="w-4 h-4 text-emergency-400" />
-              </div>
-              <span>
-                Cyber{" "}
-                <span className="text-crimson-gradient">Safety</span> Briefing
-              </span>
-            </h3>
-            <p className="text-[11px] text-slate-400 mt-1 tracking-wide">
-              In-house safety-desk advisories based on official cybercrime reports.
-            </p>
-          </div>
+        {/* Top control bar */}
+        <div className="flex items-center justify-between border-b border-neutral-800 px-5 sm:px-8 py-3">
+          <span className="text-[10px] font-bold uppercase tracking-[0.28em] text-neutral-500">
+            Cybercrime Intelligence · Safety Desk
+          </span>
           <button
             type="button"
             onClick={onClose}
             aria-label="Close briefing"
-            className="p-1.5 rounded-lg text-slate-400 hover:text-white hover:bg-white/5 transition"
+            className="group inline-flex items-center gap-1.5 rounded-md px-2.5 py-1.5 text-neutral-400 hover:bg-white/5 hover:text-white transition"
           >
+            <span className="hidden text-[10px] font-bold uppercase tracking-[0.25em] sm:inline">
+              Close
+            </span>
             <X className="w-4 h-4" />
           </button>
         </div>
 
-        {/* Briefing cards */}
-        <div className="flex-1 overflow-y-auto px-6 py-5 space-y-4">
-          {cyberSafetyBriefings.map((b, idx) => (
-            <article
-              key={b.id}
-              className="rounded-2xl border border-white/8 bg-white/[0.03] p-4 sm:p-5 transition-colors hover:border-emergency-500/25"
-              style={{ animation: `fadeInUp 0.6s ease-out both`, animationDelay: `${idx * 70}ms` }}
-            >
-              <div className="flex items-center gap-2 mb-2.5">
-                <span
-                  className={`inline-flex items-center px-2.5 py-0.5 rounded-full text-[10px] font-extrabold tracking-[0.14em] uppercase border ${
-                    tagStyles[b.tag] ?? "bg-slate-500/15 text-slate-300 border-slate-500/30"
-                  }`}
-                >
-                  {b.tag}
-                </span>
-                <span className="inline-flex items-center gap-1 text-[11px] text-slate-500">
-                  <CalendarDays className="w-3 h-3" />
-                  {b.publishedAt}
-                </span>
-              </div>
-              <h4 className="text-sm sm:text-base font-bold text-white leading-snug">
-                {b.headline}
-              </h4>
-              <p className="mt-2 text-[13px] sm:text-sm text-slate-300/85 leading-relaxed">
-                {b.summary}
-              </p>
-              <div className="mt-3.5 flex items-center justify-between gap-3">
-                <span className="text-[11px] text-slate-500 tracking-wide truncate">
-                  Source: {b.source}
-                </span>
-                <a
-                  href={b.sourceUrl}
-                  target="_blank"
-                  rel="noopener noreferrer"
-                  className="inline-flex items-center gap-1.5 text-[12px] font-bold text-emergency-300 hover:text-emergency-200 transition-colors shrink-0"
-                >
-                  Read Full Story
-                  <ExternalLink className="w-3.5 h-3.5" />
-                </a>
-              </div>
-            </article>
-          ))}
+        {/* Masthead */}
+        <div className="border-b border-neutral-800 px-5 sm:px-8 pb-5 pt-4">
+          <div className="flex flex-col items-center border-t-2 border-neutral-600 pt-4 pb-3 text-center">
+            <h2 className="font-serif text-3xl font-black uppercase tracking-tight text-[#efeee8] sm:text-4xl">
+              Cyber Safety Briefing
+            </h2>
+            <p className="mt-1 text-[10px] uppercase tracking-[0.3em] text-neutral-500 sm:text-[11px]">
+              Sakhi News Desk · India
+            </p>
+          </div>
+          <div className="mt-1 flex flex-wrap items-center justify-between gap-x-3 gap-y-1 border-t border-neutral-700 pt-2.5 text-[9px] font-semibold uppercase tracking-[0.2em] text-neutral-500 sm:text-[10px]">
+            <span>Selected reports from the public record</span>
+            <span>{editionDate}</span>
+          </div>
         </div>
 
-        {/* Footer note */}
-        <div className="flex items-start gap-2.5 px-6 py-4 border-t border-white/5 bg-black/30">
-          <ShieldCheck className="w-4 h-4 text-emerald-400 shrink-0 mt-0.5" />
-          <p className="text-[11px] text-slate-400 leading-relaxed">
-            In an active fraud, call <strong className="text-emergency-300">1930</strong> within
-            the first hour and file the official report at{" "}
-            <span className="text-slate-200 font-semibold">cybercrime.gov.in</span>. Save
-            screenshots to the Evidence Locker (SHA-256 hashed) before you call.
-          </p>
+        {/* Scrollable article area */}
+        <div className="flex-1 overflow-y-auto overflow-x-hidden">
+          <div className="px-5 py-6 sm:px-8 sm:py-7">
+            {/* LEAD STORY */}
+            {lead && (
+              <article className="border-l-[3px] border-red-900/70 pl-4 sm:pl-6">
+                <div className="text-[10px] font-bold uppercase tracking-[0.22em] text-red-400/90">
+                  {lead.category} — Lead story
+                </div>
+                <h3 className="mt-2 font-serif text-2xl font-bold leading-tight text-[#f0efe9] sm:text-3xl">
+                  {lead.headline}
+                </h3>
+                <div className="mt-3">
+                  <MetaRow brief={lead} />
+                </div>
+                <p className="mt-3 max-w-2xl text-sm leading-relaxed text-neutral-300 sm:text-[15px]">
+                  {lead.summary}
+                </p>
+                <div className="mt-4">
+                  <ReadArticle brief={lead} />
+                </div>
+              </article>
+            )}
+
+            {/* Section divider */}
+            <div className="mt-8 mb-7 flex items-center gap-4 text-[10px] font-semibold uppercase tracking-[0.3em] text-neutral-500">
+              <div className="h-px flex-1 bg-neutral-800" aria-hidden />
+              <span>More from the desk</span>
+              <div className="h-px flex-1 bg-neutral-800" aria-hidden />
+            </div>
+
+            {/* SECONDARY STORIES */}
+            <div className="grid gap-x-8 gap-y-8 sm:grid-cols-2 md:gap-x-10">
+              {secondaries.map((b) => (
+                <article key={b.id} className="min-w-0">
+                  <div className="border-t border-neutral-700/80 pt-4">
+                    <div className="text-[9px] font-bold uppercase tracking-[0.2em] text-neutral-400">
+                      {b.category}
+                    </div>
+                    <h4 className="mt-2 font-serif text-lg font-bold leading-snug text-[#ebe9e3] sm:text-xl">
+                      {b.headline}
+                    </h4>
+                    <div className="mt-2.5">
+                      <MetaRow brief={b} />
+                    </div>
+                    <p className="mt-2.5 text-[13px] leading-relaxed text-neutral-400 sm:text-sm">
+                      {b.summary}
+                    </p>
+                    <div className="mt-3.5">
+                      <ReadArticle brief={b} />
+                    </div>
+                  </div>
+                </article>
+              ))}
+            </div>
+          </div>
+        </div>
+
+        {/* Safety desk note */}
+        <div className="border-t-2 border-neutral-800 bg-[#0c0c10]">
+          <div className="flex flex-col gap-2 px-5 py-4 sm:flex-row sm:items-start sm:gap-4 sm:px-8">
+            <span className="text-[10px] font-bold uppercase tracking-[0.25em] text-neutral-500 sm:pt-0.5 sm:shrink-0">
+              Safety desk
+            </span>
+            <p className="min-w-0 text-[11px] leading-relaxed text-neutral-400 sm:text-xs">
+              In an active fraud, call <strong className="font-semibold text-red-400">1930</strong>{" "}
+              within the first hour and file a report at{" "}
+              <span className="font-semibold text-slate-200">cybercrime.gov.in</span>. Save
+              screenshots to the Evidence Locker (SHA-256 hashed) before you call.
+            </p>
+          </div>
         </div>
       </div>
     </div>
