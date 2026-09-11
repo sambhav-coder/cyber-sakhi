@@ -7,6 +7,10 @@ import {
   verifyChainOfCustody,
 } from "@/lib/db/chainOfCustody";
 import { verifyEvidenceOwnership } from "@/lib/db/evidence";
+import {
+  getEvidenceIntegrityProvider,
+  getBlockchainAnchorStatus,
+} from "@/lib/evidenceIntegrityProvider";
 
 const VALID_ACTIONS = [
   "RETRIEVED",
@@ -15,6 +19,7 @@ const VALID_ACTIONS = [
   "INTEGRITY_FAILED",
   "VIEWED",
   "DOWNLOADED",
+  "EXPORTED",
 ];
 
 export async function POST(req: NextRequest) {
@@ -109,11 +114,17 @@ export async function GET(req: NextRequest) {
       return NextResponse.json({
         events,
         verification,
+        integrityProvider: getEvidenceIntegrityProvider(),
+        blockchainAnchor: getBlockchainAnchorStatus(),
       });
     }
 
     const events = await listChainOfCustody(evidenceId);
-    return NextResponse.json({ events });
+    return NextResponse.json({
+      events,
+      integrityProvider: getEvidenceIntegrityProvider(),
+      blockchainAnchor: getBlockchainAnchorStatus(),
+    });
   } catch (error) {
     console.error("Chain of custody list error:", error);
     return NextResponse.json(

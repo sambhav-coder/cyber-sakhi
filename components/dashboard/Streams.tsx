@@ -51,33 +51,60 @@ export const ActivityFeed: React.FC<{ entries: ActivityEntry[] }> = ({
         const meta = KIND_META[entry.kind];
         return (
           <li key={entry.id}>
-            <Link
-              href={entry.href}
-              className="block p-3.5 rounded-xl bg-slate-900/70 border border-slate-800 hover:border-emergency-700/40 transition space-y-2 text-xs group"
-            >
-              <div className="flex items-center justify-between gap-3">
-                <span className="flex items-center gap-1.5 text-slate-400 text-[11px]">
-                  {meta.icon}
-                  <span>{meta.label}</span>
-                </span>
-                <span className="flex items-center gap-2 shrink-0">
-                  {entry.severity && (
-                    <ThreatBadge severity={entry.severity} size="sm" />
-                  )}
-                  <span className="text-[10px] text-slate-500 font-mono">
-                    {relativeTime(entry.timestamp)}
+            {entry.href ? (
+              <Link
+                href={entry.href}
+                className="block p-3.5 rounded-xl bg-slate-900/70 border border-slate-800 hover:border-emergency-700/40 transition space-y-2 text-xs group"
+              >
+                <div className="flex items-center justify-between gap-3">
+                  <span className="flex items-center gap-1.5 text-slate-400 text-[11px]">
+                    {meta.icon}
+                    <span>{meta.label}</span>
                   </span>
-                </span>
+                  <span className="flex items-center gap-2 shrink-0">
+                    {entry.severity && (
+                      <ThreatBadge severity={entry.severity} size="sm" />
+                    )}
+                    <span className="text-[10px] text-slate-500 font-mono">
+                      {relativeTime(entry.timestamp)}
+                    </span>
+                  </span>
+                </div>
+
+                <p className="text-slate-200 font-medium leading-snug break-words">
+                  {entry.kind === "SCAN" ? `"${entry.title}"` : entry.title}
+                </p>
+
+                <p className="text-[11px] text-slate-500 break-words">
+                  {entry.subtitle}
+                </p>
+              </Link>
+            ) : (
+              <div className="block p-3.5 rounded-xl bg-slate-900/70 border border-slate-800 transition space-y-2 text-xs group">
+                <div className="flex items-center justify-between gap-3">
+                  <span className="flex items-center gap-1.5 text-slate-400 text-[11px]">
+                    {meta.icon}
+                    <span>{meta.label}</span>
+                  </span>
+                  <span className="flex items-center gap-2 shrink-0">
+                    {entry.severity && (
+                      <ThreatBadge severity={entry.severity} size="sm" />
+                    )}
+                    <span className="text-[10px] text-slate-500 font-mono">
+                      {relativeTime(entry.timestamp)}
+                    </span>
+                  </span>
+                </div>
+
+                <p className="text-slate-200 font-medium leading-snug break-words">
+                  {entry.kind === "SCAN" ? `"${entry.title}"` : entry.title}
+                </p>
+
+                <p className="text-[11px] text-slate-500 break-words">
+                  {entry.subtitle}
+                </p>
               </div>
-
-              <p className="text-slate-200 font-medium leading-snug break-words">
-                {entry.kind === "SCAN" ? `"${entry.title}"` : entry.title}
-              </p>
-
-              <p className="text-[11px] text-slate-500 break-words">
-                {entry.subtitle}
-              </p>
-            </Link>
+            )}
           </li>
         );
       })}
@@ -125,7 +152,7 @@ export const ReadinessList: React.FC<{ items: ReadinessItem[] }> = ({
               </span>
               <span className="block text-[11px] text-slate-500">
                 {item.detail}
-                {!item.done && (
+                {!item.done && item.href && (
                   <Link
                     href={item.href}
                     className="ml-1.5 text-emergency-300 hover:underline inline-flex items-center gap-0.5"

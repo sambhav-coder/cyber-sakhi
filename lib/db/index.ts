@@ -8,4 +8,5 @@ export * from "./evidence";
 export * from "./chainOfCustody";
 export * from "./indicators";
 export * from "./reports";
+export * from "./caseChat";
 export * from "./trustedContacts";

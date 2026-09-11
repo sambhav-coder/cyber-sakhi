@@ -6,7 +6,9 @@ export interface AppUser {
   email: string;
   passwordHash?: string;
   role: UserRole;
-  image?: string;
   sakhiNumber?: string;
+  age?: string | null;
+  city?: string | null;
+  phone?: string | null;
   createdAt: string;
 }

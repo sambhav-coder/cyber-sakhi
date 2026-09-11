@@ -41,36 +41,12 @@ export const DEFAULT_CONTACTS: TrustedContact[] = [
   },
 ];
 
-export const DEFAULT_EVIDENCE: EvidenceItem[] = [
-  {
-    id: "ev_1",
-    title: "Instagram DM Extortion Threat",
-    filename: "insta_threat_screenshot_0826.png",
-    fileType: "image/png",
-    fileSize: 482910,
-    timestamp: "2026-08-26T14:32:00.000Z",
-    sha256Hash: "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855",
-    category: "BLACKMAIL",
-    notes: "Sender demanded ₹25,000 within 2 hours or threatened to distribute morph photos to college contacts.",
-    integrityVerified: true,
-    simulatedIpfsCid: "bafybeic7v3p5p3x8n6f5r8q2l7m6k4q2l7m6",
-    simulatedTxHash: "0x7a29e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852",
-  },
-  {
-    id: "ev_2",
-    title: "Repeated WhatsApp Stalking Audio Note",
-    filename: "voice_threat_whatsapp_0828.m4a",
-    fileType: "audio/m4a",
-    fileSize: 1245000,
-    timestamp: "2026-08-28T22:15:00.000Z",
-    sha256Hash: "9f86d081884c7d659a2feaa0c55ad015a3bf4f1b2b0b822cd15d6c15b0f00a08",
-    category: "STALKING",
-    notes: "Caller stated they were outside the building and demanded to meet alone.",
-    integrityVerified: true,
-    simulatedIpfsCid: "bafybeif9f86d081884c7d659a2feaa0c55ad01",
-    simulatedTxHash: "0x4b822cd15d6c15b0f00a089f86d081884c7d659a2feaa0c55ad015a3bf4f1b2b",
-  },
-];
+/**
+ * No sample evidence ships with the app. The vault must never populate
+ * itself with fabricated artifacts — the first-time state is genuinely
+ * empty until the user uploads their own evidence.
+ */
+export const DEFAULT_EVIDENCE: EvidenceItem[] = [];
 
 export const DEFAULT_ADMIN_INCIDENTS: AdminIncident[] = [
   {
@@ -150,16 +126,13 @@ export function saveStoredContacts(contacts: TrustedContact[]): void {
 }
 
 export function getStoredEvidence(): EvidenceItem[] {
-  if (typeof window === "undefined") return DEFAULT_EVIDENCE;
+  if (typeof window === "undefined") return [];
   const raw = localStorage.getItem(EVIDENCE_KEY);
-  if (!raw) {
-    localStorage.setItem(EVIDENCE_KEY, JSON.stringify(DEFAULT_EVIDENCE));
-    return DEFAULT_EVIDENCE;
-  }
+  if (!raw) return [];
   try {
     return JSON.parse(raw);
   } catch {
-    return DEFAULT_EVIDENCE;
+    return [];
   }
 }
 

@@ -3,7 +3,7 @@ import {
   SMTPHop,
 } from "./emailTypes";
 
-function getHeaderValue(rawHeaders: string, headerName: string): string | undefined {
+export function getHeaderValue(rawHeaders: string, headerName: string): string | undefined {
   const regex = new RegExp(
     `^${headerName}:\\s*(.+(?:\\r?\\n[ \\t].+)*)$`,
     "im"
@@ -16,6 +16,19 @@ function getHeaderValue(rawHeaders: string, headerName: string): string | undefi
   return match[1]
     .replace(/\r?\n[ \t]+/g, " ")
     .trim();
+}
+
+function getHeaderValues(rawHeaders: string, headerName: string): string[] {
+  const matches = rawHeaders.match(
+    new RegExp(`^${headerName}:\\s*(.+(?:\\r?\\n[ \\t].+)*)$`, "gim")
+  );
+  if (!matches) return [];
+  return matches.map((header) =>
+    header
+      .replace(new RegExp(`^${headerName}:\\s*`, "i"), "")
+      .replace(/\r?\n[ \t]+/g, " ")
+      .trim()
+  );
 }
 
 function getReceivedHeaders(rawHeaders: string): string[] {
@@ -54,6 +67,86 @@ export function extractHeaders(rawEmail: string): EmailHeaderAnalysis {
     ),
     received: getReceivedHeaders(rawHeaders),
     rawHeaders,
+    sender: getHeaderValue(rawHeaders, "Sender"),
+    contentType: getHeaderValue(rawHeaders, "Content-Type"),
+    xOriginatingIp: getHeaderValue(rawHeaders, "X-Originating-IP"),
+    xMailer: getHeaderValue(rawHeaders, "X-Mailer"),
+    userAgent: getHeaderValue(rawHeaders, "User-Agent"),
+    dkimSignature: getHeaderValue(rawHeaders, "DKIM-Signature"),
+    arcHeaders: getHeaderValues(rawHeaders, "ARC-Authentication-Results"),
+  };
+}
+
+// ---------------------------------------------------------------------------
+// MIME attachment discovery (structural only — never decodes or executes files)
+// ---------------------------------------------------------------------------
+
+export interface RawAttachmentMeta {
+  filename: string;
+  mimeType?: string;
+  sizeEstimateBytes?: number;
+  rawDisposition?: string;
+}
+
+export function extractMimeAttachments(rawEmail: string): RawAttachmentMeta[] {
+  const attachments: RawAttachmentMeta[] = [];
+  const seen = new Set<string>();
+
+  const partitions = rawEmail.split(/--[^\r\n]+/g);
+
+  for (const part of partitions) {
+    const dispMatch = part.match(/^Content-Disposition:\s*([^;\r\n]+)/im);
+    if (!dispMatch) continue;
+
+    const disposition = dispMatch[1]?.trim().toLowerCase();
+    if (disposition !== "attachment" && disposition !== "inline") continue;
+
+    const filenameMatch = part.match(/filename\s*=\s*"?([^";\r\n]+)"?/i);
+    const typeMatch = part.match(/^Content-Type:\s*([^;\r\n]+)/im);
+    const filename = filenameMatch?.[1]?.trim();
+
+    if (!filename) continue;
+
+    const key = filename.toLowerCase();
+    if (seen.has(key)) continue;
+    seen.add(key);
+
+    attachments.push({
+      filename,
+      mimeType: typeMatch?.[1]?.trim().toLowerCase(),
+      sizeEstimateBytes: estimatePartSize(part),
+      rawDisposition: disposition,
+    });
+  }
+
+  return attachments;
+}
+
+function estimatePartSize(part: string): number | undefined {
+  try {
+    const bytes = Buffer.byteLength(part, "utf8");
+    return bytes > 0 ? bytes : undefined;
+  } catch {
+    return undefined;
+  }
+}
+
+function parseDateIso(timestamp: string | undefined): {
+  iso?: string;
+  timezone?: string;
+} | null {
+  if (!timestamp) return null;
+  const tzMatch = timestamp.match(/(\([A-Z]{2,5}\))|([A-Z]{3,5})$|\+\d{2}:?\d{2}|-\d{2}:?\d{2}/);
+  const tz = tzMatch?.[1] || tzMatch?.[2] || tzMatch?.[0] || undefined;
+
+  // Normalize "Tue, 10 Sep 2026 09:13:00 +0530" and "Tue, 10 Sep 2026 09:13:55 +0000 (UTC)"
+  const cleaned = timestamp.replace(/\([A-Z]{2,5}\)$/, "").trim();
+  const parsed = Date.parse(cleaned);
+  if (Number.isNaN(parsed)) return { timezone: tz };
+
+  return {
+    iso: new Date(parsed).toISOString(),
+    timezone: tz,
   };
 }
 
@@ -87,11 +180,16 @@ export function reconstructSMTPPath(
       /;\s*(.+)$/
     );
 
+    const timestamp = timestampMatch?.[1]?.trim();
+    const dateParsed = parseDateIso(timestamp);
+
     return {
       from: fromMatch?.[1]?.trim(),
       by: byMatch?.[1]?.trim(),
       ip,
-      timestamp: timestampMatch?.[1]?.trim(),
+      timestamp,
+      timestampIso: dateParsed?.iso,
+      timezone: dateParsed?.timezone,
       raw: header,
     };
   });

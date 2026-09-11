@@ -9,7 +9,7 @@ export async function listEmailInvestigationsForUser(
   const { data, error } = await getSupabaseServer()
     .from("email_investigations")
     .select("*")
-    .eq("user_id", userId)
+    .eq("created_by", userId)
     .order("created_at", { ascending: false });
 
   throwIfError(error, "Failed to list email investigations.");
@@ -24,11 +24,16 @@ export async function createEmailInvestigation(input: {
   const { data, error } = await getSupabaseServer()
     .from("email_investigations")
     .insert({
-      user_id: input.userId,
       case_id: input.caseId ?? null,
+      created_by: input.userId,
+      source: "pasted_headers",
       subject: input.result.headers.subject ?? null,
-      threat_level: input.result.threatLevel,
-      threat_score: input.result.threatScore,
+      sender: input.result.headers.from ?? null,
+      recipients: [input.result.headers.to ?? null, input.result.headers.cc ?? null]
+        .filter(Boolean),
+      risk_score: input.result.threatScore,
+      verdict: input.result.threatLevel,
+      headers: input.result.headers,
       analysis: input.result,
     })
     .select("*")

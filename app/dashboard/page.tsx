@@ -8,10 +8,8 @@ import {
   Lock,
   Search,
   Users,
-  Radio,
   Activity,
   Clock,
-  Zap,
   Database,
   Trash2,
   ShieldOff,
@@ -157,23 +155,6 @@ export default function DashboardPage() {
           <p className="text-sm text-slate-300">
             Every figure below is computed from the records held in this browser.
           </p>
-        </div>
-
-        <div className="flex items-center gap-2 shrink-0">
-          <Link
-            href="/detector"
-            className="px-5 py-2.5 rounded-xl bg-emergency-600 hover:bg-emergency-500 text-white text-xs font-bold transition flex items-center gap-2 shadow-lg shadow-emergency-950/40"
-          >
-            <Zap className="w-4 h-4" />
-            <span>New Threat Scan</span>
-          </Link>
-          <Link
-            href="/sos"
-            className="px-4 py-2.5 rounded-xl bg-red-950/70 hover:bg-red-900 border border-red-500/40 text-red-200 text-xs font-bold transition flex items-center gap-1.5"
-          >
-            <Radio className="w-3.5 h-3.5" />
-            <span>SOS</span>
-          </Link>
         </div>
       </div>
 

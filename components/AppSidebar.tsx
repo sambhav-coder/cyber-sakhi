@@ -8,16 +8,12 @@ import {
   LayoutDashboard,
   MessageSquare,
   Mail,
-  Search,
   Lock,
-  AlertTriangle,
-  Users,
-  ShieldAlert,
-  Code,
   ChevronLeft,
   ChevronRight,
   X,
   ShieldCheck,
+  FileText,
 } from "lucide-react";
 import { BrandLogo } from "./BrandLogo";
 import { clsx } from "clsx";
@@ -65,44 +61,16 @@ const mainNavLinks: NavLink[] = [
     description: "Deep email investigation",
   },
   {
-    href: "/detector",
-    label: "Threat Detector",
-    icon: Search,
-    description: "Phishing & fraud detection",
+    href: "/cases",
+    label: "My Cases",
+    icon: FileText,
+    description: "Case dashboard & reports",
   },
   {
     href: "/locker",
     label: "Evidence Locker",
     icon: Lock,
     description: "Encrypted evidence + chain of custody",
-  },
-  {
-    href: "/sos",
-    label: "Emergency SOS",
-    icon: AlertTriangle,
-    description: "VoiceShield SOS beacon",
-    accent: true,
-  },
-  {
-    href: "/contacts",
-    label: "Contacts",
-    icon: Users,
-    description: "Emergency & trusted contacts",
-  },
-  {
-    href: "/developer",
-    label: "SDK / API",
-    icon: Code,
-    description: "Developer documentation",
-  },
-];
-
-const adminNavLinks: NavLink[] = [
-  {
-    href: "/admin",
-    label: "Admin Portal",
-    icon: ShieldAlert,
-    description: "Incident review & RBAC",
   },
 ];
 
@@ -114,13 +82,14 @@ export const AppSidebar: React.FC<AppSidebarProps> = ({
 }) => {
   const pathname = usePathname();
   const { data: session } = useSession();
-  const isAdmin = session?.user?.role === "ADMIN";
   const sakhiNumber = session?.user?.sakhiNumber;
 
-  const visibleLinks: NavLink[] = [
-    ...mainNavLinks,
-    ...(isAdmin ? adminNavLinks : []),
-  ];
+  // Mask Sakhi Number: SAKHI-2026-ABXXX
+  const maskedSakhiNumber = sakhiNumber
+    ? sakhiNumber.replace(/([A-Z0-9]{2})[A-Z0-9]{3}$/, "$1XXX")
+    : null;
+
+  const visibleLinks: NavLink[] = mainNavLinks;
 
   const sidebarInner = (
     <div className="h-full flex flex-col w-full">
@@ -165,7 +134,7 @@ export const AppSidebar: React.FC<AppSidebarProps> = ({
       </div>
 
       {/* Sakhi Number strip (authenticated) */}
-      {!collapsed && sakhiNumber && (
+      {!collapsed && maskedSakhiNumber && (
         <div className="shrink-0 px-4 py-3 border-b border-white/5">
           <div className="p-2.5 rounded-xl border border-emergency-500/20 bg-emergency-950/40">
             <div className="flex items-center justify-between gap-2">
@@ -177,7 +146,7 @@ export const AppSidebar: React.FC<AppSidebarProps> = ({
               </div>
             </div>
             <div className="mt-1 font-mono font-black tracking-[0.08em] text-emergency-300 text-[12px] truncate">
-              {sakhiNumber}
+              {maskedSakhiNumber}
             </div>
           </div>
         </div>

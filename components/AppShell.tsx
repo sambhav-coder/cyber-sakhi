@@ -11,9 +11,11 @@ import {
   AlertTriangle,
   User,
   ChevronDown,
+  KeyRound,
 } from "lucide-react";
 import { AppSidebar } from "@/components/AppSidebar";
 import { SOSModal } from "@/components/SOSModal";
+import { ChangePasswordModal } from "@/components/ChangePasswordModal";
 import { clsx } from "clsx";
 import { twMerge } from "tailwind-merge";
 
@@ -21,7 +23,7 @@ function cn(...inputs: Parameters<typeof clsx>) {
   return twMerge(clsx(inputs));
 }
 
-const PUBLIC_PATHS = new Set(["/", "/login", "/signup", "/privacy"]);
+const PUBLIC_PATHS = new Set(["/", "/login", "/signup", "/privacy", "/recover"]);
 
 const TopBar: React.FC<{ onOpenSidebar: () => void; sidebarCollapsed: boolean }> = ({
   onOpenSidebar,
@@ -30,9 +32,13 @@ const TopBar: React.FC<{ onOpenSidebar: () => void; sidebarCollapsed: boolean }>
   const { data: session, status } = useSession();
   const [isUserMenuOpen, setIsUserMenuOpen] = useState(false);
   const [isSosOpen, setIsSosOpen] = useState(false);
+  const [isChangePasswordModalOpen, setIsChangePasswordModalOpen] = useState(false);
 
   const isAdmin = session?.user?.role === "ADMIN";
   const sakhiNumber = session?.user?.sakhiNumber;
+  const maskedSakhiNumber = sakhiNumber
+    ? sakhiNumber.replace(/([A-Z0-9]{2})[A-Z0-9]{3}$/, "$1XXX")
+    : null;
   const userInitial = session?.user?.name?.charAt(0).toUpperCase() || "U";
 
   const handleSignOut = () => {
@@ -52,6 +58,7 @@ const TopBar: React.FC<{ onOpenSidebar: () => void; sidebarCollapsed: boolean }>
   };
 
   return (
+    <>
     <header
       className="sticky top-0 z-20 h-16 shrink-0 flex items-center justify-between px-4 sm:px-6 backdrop-blur-xl border-b"
       style={{
@@ -78,9 +85,9 @@ const TopBar: React.FC<{ onOpenSidebar: () => void; sidebarCollapsed: boolean }>
           </span>
           <span className="text-slate-700">/</span>
           <span className="truncate text-slate-300/80 font-medium">
-            {sakhiNumber ? (
+            {maskedSakhiNumber ? (
               <span className="font-mono text-[11px] tracking-wider text-emerald-300/90">
-                {sakhiNumber}
+                {maskedSakhiNumber}
               </span>
             ) : (
               "Security Console"
@@ -204,7 +211,7 @@ const TopBar: React.FC<{ onOpenSidebar: () => void; sidebarCollapsed: boolean }>
                           </span>
                           {sakhiNumber && (
                             <span className="font-mono text-[10px] tracking-wider text-emergency-300">
-                              {sakhiNumber}
+                              {maskedSakhiNumber}
                             </span>
                           )}
                         </div>
@@ -235,6 +242,18 @@ const TopBar: React.FC<{ onOpenSidebar: () => void; sidebarCollapsed: boolean }>
 
                     <button
                       type="button"
+                      onClick={() => {
+                        setIsUserMenuOpen(false);
+                        setIsChangePasswordModalOpen(true);
+                      }}
+                      className="w-full flex items-center gap-2.5 px-3 py-2 rounded-xl text-slate-200 hover:bg-white/5 transition"
+                    >
+                      <KeyRound className="w-3.5 h-3.5 text-slate-400" />
+                      <span className="font-semibold text-left flex-1">Change Password</span>
+                    </button>
+
+                    <button
+                      type="button"
                       onClick={handleSignOut}
                       className="w-full flex items-center gap-2.5 px-3 py-2 rounded-xl text-red-300 hover:bg-red-950/40 border border-transparent hover:border-red-500/20 transition mt-1"
                     >
@@ -256,9 +275,14 @@ const TopBar: React.FC<{ onOpenSidebar: () => void; sidebarCollapsed: boolean }>
         ) : null}
       </div>
 
-      {/* SOS modal */}
-      <SOSModal isOpen={isSosOpen} onClose={() => setIsSosOpen(false)} />
     </header>
+
+      <SOSModal isOpen={isSosOpen} onClose={() => setIsSosOpen(false)} />
+      <ChangePasswordModal
+        isOpen={isChangePasswordModalOpen}
+        onClose={() => setIsChangePasswordModalOpen(false)}
+      />
+    </>
   );
 };
 
@@ -268,7 +292,8 @@ interface AppShellProps {
 
 export const AppShell: React.FC<AppShellProps> = ({ children }) => {
   const pathname = usePathname();
-  const isPublicRoute = PUBLIC_PATHS.has(pathname);
+  const isPublicRoute =
+    PUBLIC_PATHS.has(pathname) || pathname.startsWith("/recover/");
 
   const [isMobileOpen, setIsMobileOpen] = useState(false);
   const [collapsed, setCollapsed] = useState(false);

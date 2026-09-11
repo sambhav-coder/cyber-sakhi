@@ -1,6 +1,8 @@
 ﻿"use client";
 
-import React, { useState } from "react";
+import React, { useState, useEffect } from "react";
+import { useRouter } from "next/navigation";
+import { useSession } from "next-auth/react";
 import {
   Code,
   Terminal,
@@ -13,12 +15,41 @@ import {
 } from "lucide-react";
 
 export default function DeveloperPage() {
+  const router = useRouter();
+  const { data: session, status } = useSession();
+
   const [testPayload, setTestPayload] = useState(
     '{\n  "text": "Send me your OTP or I will leak your photos."\n}'
   );
   const [apiResponse, setApiResponse] = useState<string | null>(null);
   const [isLoading, setIsLoading] = useState(false);
   const [copiedSnippet, setCopiedSnippet] = useState(false);
+
+  // Server-side authorization is enforced by middleware.ts. This client-side
+  // guard is defense in depth so a normal USER can never reach the SDK/API
+  // playground, even if the edge middleware were bypassed.
+  useEffect(() => {
+    if (status === "unauthenticated") {
+      router.replace("/login");
+    } else if (status === "authenticated" && session?.user?.role !== "ADMIN") {
+      router.replace("/dashboard");
+    }
+  }, [status, session, router]);
+
+  if (status === "loading") {
+    return (
+      <div className="min-h-[400px] flex flex-col items-center justify-center space-y-3 animate-in fade-in">
+        <div className="w-10 h-10 rounded-full border-2 border-purple-500 border-t-transparent animate-spin" />
+        <p className="text-xs text-purple-300 font-semibold tracking-wider uppercase">
+          Verifying Administrator Privileges & Server Session...
+        </p>
+      </div>
+    );
+  }
+
+  if (!session || session.user.role !== "ADMIN") {
+    return null;
+  }
 
   const handleTestApi = async () => {
     setIsLoading(true);

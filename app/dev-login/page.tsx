@@ -5,7 +5,6 @@ import { useRouter } from "next/navigation";
 import { signIn, signOut, useSession } from "next-auth/react";
 import { ShieldAlert, LogIn, LogOut, ArrowRight } from "lucide-react";
 import { DEV_PERSONAS, DEV_LOGIN_PROVIDER_ID } from "@/lib/devAuth";
-import { OffenderNetworkSeedCard } from "@/components/OffenderNetworkSeedCard";
 
 /* Local-only. The provider this page calls is not registered in a
  * production build, so these buttons cannot work off a dev machine. */
@@ -134,8 +133,6 @@ export default function DevLoginPage() {
           </button>
         ))}
       </div>
-
-      <OffenderNetworkSeedCard />
 
       <button
         onClick={() => router.push("/dashboard")}

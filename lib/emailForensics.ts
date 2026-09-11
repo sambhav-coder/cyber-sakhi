@@ -1,15 +1,29 @@
 import { lookupIpIntelligence } from "./ipIntelligence";
 import { lookupDomainIntelligence } from "./domainIntelligence";
 import { correlateIndicators } from "./indicatorCorrelation";
-import { analyzeMessage } from "./threatEngine";
-import type { ThreatAnalysisResult } from "./types";
 import {
   EmailAnalysisResult,
   EmailAuthentication,
   AuthenticationResult,
   ThreatIndicator,
 } from "./emailTypes";
-import { extractHeaders, reconstructSMTPPath } from "./emailParser";
+import {
+  analyzeAttachmentStructure,
+  analyzeSmtpAnomalies,
+  analyzeSpoofingComposite,
+  buildScoreBreakdown,
+  buildStructuredFindings,
+  buildVerdict,
+  dedupeAnomalies,
+  extractEntities,
+} from "./advancedForensics";
+import {
+  PHISHING_URL_PATTERNS,
+  analyzePhishingNlp,
+  activePhishingProviderLabel,
+} from "./nlpPhishing";
+import { analyzeUrlRisk } from "./urlRisk";
+import { extractHeaders, extractMimeAttachments, reconstructSMTPPath } from "./emailParser";
 
 // ---------------------------------------------------------------------------
 // 1. SPF / DKIM / DMARC — extract verdicts from Authentication-Results header
@@ -19,7 +33,13 @@ function parseAuthStatus(
   raw: string,
   protocol: "spf" | "dkim" | "dmarc"
 ): AuthenticationResult {
-  if (!raw) return { status: "none", details: "Authentication-Results header absent" };
+  if (!raw) {
+    return {
+      status: "none",
+      details: "Authentication-Results header absent",
+      scope: { fromDomain: extractDomainFromRaw(raw) },
+    };
+  }
 
   // Find the protocol-specific segment, e.g. "spf=pass", "dkim=fail", "dmarc=none"
   const pattern = new RegExp(
@@ -32,6 +52,7 @@ function parseAuthStatus(
     return {
       status: "none",
       details: `No ${protocol.toUpperCase()} record found in Authentication-Results`,
+      scope: { fromDomain: extractDomainFromRaw(raw) },
     };
   }
 
@@ -50,7 +71,23 @@ function parseAuthStatus(
 
   const details = (match[2] || "").trim().replace(/^\(|\)$/g, "").trim() || undefined;
 
-  return { status, details };
+  const scope = {
+    mailfrom: match?.[2]?.match(/(?:mailfrom|envelope-from)\s*=\s*([^\s;]+)/i)?.[1],
+    headerD: match?.[2]?.match(/header\.d\s*=\s*([^\s;]+)/i)?.[1],
+    clientIp: match?.[2]?.match(/client-ip(?:=|!)\s*([^\s;]+)/i)?.[1],
+    policy: match?.[2]?.match(/p\s*=\s*(none|quarantine|reject)/i)?.[1],
+    disposition: match?.[2]?.match(/disposition\s*=\s*([a-z]+)/i)?.[1],
+    selector: match?.[2]?.match(/selector\s*=\s*([^\s;]+)/i)?.[1],
+    fromDomain: extractDomainFromRaw(raw),
+  };
+
+  return { status, details, scope };
+}
+
+function extractDomainFromRaw(raw: string): string | undefined {
+  const m = raw.match(/header\.from\s*=\s*([^\s;>]+)/i);
+  if (!m) return undefined;
+  return m[1].replace(/[<>]/g, "").split("@").pop()?.toLowerCase();
 }
 
 function parseAuthentication(authResults?: string): EmailAuthentication {
@@ -155,61 +192,6 @@ interface PhishingResult {
   triggers: string[];
 }
 
-const PHISHING_RULES: Array<{ regex: RegExp; weight: number; trigger: string }> = [
-  // Urgency / account threat
-  { regex: /your\s+account\s+(has\s+been\s+)?(suspended|blocked|locked|disabled|terminated)/i, weight: 30, trigger: "Account suspension threat" },
-  { regex: /verify\s+(your\s+)?(account|email|identity|payment|details)/i, weight: 20, trigger: "Verification demand" },
-  { regex: /action\s+required|immediate\s+action|act\s+now|respond\s+immediately/i, weight: 20, trigger: "Urgency language" },
-  { regex: /within\s+\d+\s+(hours?|minutes?|days?)\s+(or\s+)?(your\s+account|access)/i, weight: 25, trigger: "Time-pressure deadline" },
-  // Credential harvesting
-  { regex: /click\s+(here|below|this\s+link)\s+to\s+(login|log\s+in|sign\s+in|confirm|reset|verify)/i, weight: 25, trigger: "Click-here login redirect" },
-  { regex: /reset\s+your\s+password|update\s+your\s+password|confirm\s+your\s+password/i, weight: 15, trigger: "Password reset lure" },
-  { regex: /enter\s+your\s+(otp|pin|password|credentials|credit\s+card|cvv|bank)/i, weight: 35, trigger: "Credential entry demand" },
-  // Financial lures
-  { regex: /won\s+(a\s+)?(lottery|prize|award|reward|gift|cash)/i, weight: 30, trigger: "Lottery/prize lure" },
-  { regex: /unclaimed\s+(funds?|money|refund|reward)|pending\s+transfer|release\s+of\s+funds/i, weight: 25, trigger: "Unclaimed funds lure" },
-  { regex: /kyc\s+(update|verification|suspended|required)|pan\s+card\s+(link|update)/i, weight: 30, trigger: "KYC/PAN phishing" },
-  { regex: /income\s+tax\s+refund|it\s+department|gst\s+refund/i, weight: 25, trigger: "Fake government refund" },
-  { regex: /upi\s+(blocked|suspended|limit)|aadhaar\s+(link|update|expired)/i, weight: 30, trigger: "UPI/Aadhaar phishing" },
-  // Malware delivery
-  { regex: /open\s+the\s+attachment|see\s+attached\s+(file|document|invoice)/i, weight: 15, trigger: "Suspicious attachment prompt" },
-  { regex: /(invoice|receipt|shipment|delivery|parcel)\s+(attached|enclosed|is\s+ready)/i, weight: 10, trigger: "Fake invoice/delivery attachment" },
-  // Impersonation keywords
-  { regex: /paypal|amazon|hdfc|sbi|icici|axis\s+bank|rbi|irdai|sebi|nsdl|npci|google\s+security|microsoft\s+security/i, weight: 10, trigger: "Known-brand impersonation keyword" },
-  { regex: /dear\s+(valued\s+)?(customer|user|member|client|subscriber)/i, weight: 10, trigger: "Generic impersonal salutation" },
-];
-
-const PHISHING_URL_PATTERNS: RegExp[] = [
-  /https?:\/\/(?!\S*(google|microsoft|amazon|facebook|apple)\.(com|in|co\.in))\S+\.(click|xyz|top|tk|ml|ga|cf|gq|ru|cn|pw|cc|bid|review|loan|win|stream)\b/i,
-  /https?:\/\/\d{1,3}\.\d{1,3}\.\d{1,3}\.\d{1,3}/,            // IP-based URL
-  /https?:\/\/[^/\s]+\.[^/\s]+\/[a-z0-9]{20,}/i,              // Long random path
-  /bit\.ly|tinyurl|t\.co|ow\.ly|is\.gd|buff\.ly|goo\.gl/i,   // URL shorteners
-];
-
-function scorePhishing(text: string): PhishingResult {
-  if (!text.trim()) return { score: 0, triggers: [] };
-
-  const triggers: string[] = [];
-  let score = 0;
-
-  for (const rule of PHISHING_RULES) {
-    if (rule.regex.test(text)) {
-      triggers.push(rule.trigger);
-      score += rule.weight;
-    }
-  }
-
-  for (const urlPattern of PHISHING_URL_PATTERNS) {
-    if (urlPattern.test(text)) {
-      triggers.push("Suspicious / shortened URL pattern detected");
-      score += 20;
-      break;
-    }
-  }
-
-  return { score: Math.min(100, score), triggers };
-}
-
 // ---------------------------------------------------------------------------
 // 5. URL and indicator extraction
 // ---------------------------------------------------------------------------
@@ -247,8 +229,7 @@ function extractIpAddresses(text: string): string[] {
 function computeThreatScore(
   authResult: EmailAuthentication,
   spoofing: SpoofingResult,
-  phishing: PhishingResult,
-  harassment: ThreatAnalysisResult | null
+  phishing: PhishingResult
 ): { score: number; level: EmailAnalysisResult["threatLevel"] } {
   let score = 0;
 
@@ -267,18 +248,6 @@ function computeThreatScore(
 
   // Phishing content
   score += phishing.score * 0.4; // weight phishing score at 40%
-
-  /* Harassment content.
-   *
-   * The phishing rules above only cover bank/credential scams, so a
-   * sextortion email sent from a genuine Gmail account scored 0: every
-   * header check correctly passes, and no content rule matches. The
-   * harassment engine that already powers /detector is folded in here at
-   * full weight, because for this product a credible threat is the
-   * headline finding, not a supporting signal. */
-  if (harassment) {
-    score = Math.max(score, harassment.score);
-  }
 
   score = Math.min(100, Math.round(score));
 
@@ -304,21 +273,9 @@ function buildFindings(
   auth: EmailAuthentication,
   spoofing: SpoofingResult,
   phishing: PhishingResult,
-  hasOriginatingIp: boolean,
-  harassment: ThreatAnalysisResult | null
+  hasOriginatingIp: boolean
 ): string[] {
   const findings: string[] = [];
-
-  // Harassment leads the findings list: if someone is being threatened,
-  // that matters more to the reader than an SPF verdict.
-  if (harassment && harassment.threatLevel !== "SAFE") {
-    findings.push(
-      `Harassment content detected (${harassment.threatLevel}, ${harassment.score}/100): ${harassment.triggers.join(", ")}`
-    );
-    for (const section of harassment.legalSections) {
-      findings.push(`Applicable law: ${section.code} — ${section.title}`);
-    }
-  }
 
   // Auth findings
   if (auth.spf.status === "pass") findings.push("✓ SPF check passed — sending server is authorized by the domain's DNS record.");
@@ -416,31 +373,53 @@ export async function analyzeEmail(rawEmailInput: string): Promise<EmailAnalysis
   const lastHop = smtpPath.length > 0 ? smtpPath[smtpPath.length - 1] : undefined;
   const smtpEnvelopeFrom = lastHop?.from;
 
-  // Step F: Spoofing detection
-  const spoofing = detectSpoofing(
+  // Step F: Spoofing detection (basic signals)
+  const basicSpoofing = detectSpoofing(
     headers.from,
     headers.replyTo,
     headers.returnPath,
     smtpEnvelopeFrom
   );
 
-  // Step G: Phishing scoring over subject + entire raw input
+  // Step F2: Composite, correlated spoofing analysis (lookalike, homoglyph,
+  // punycode, envelope-vs-header mismatch, brand impersonation).
+  const headerBodySplit = rawEmailInput.search(/\r?\n\r?\n/);
+  const bodyText =
+    headerBodySplit === -1 ? rawEmailInput : rawEmailInput.slice(headerBodySplit);
+  const spoofing = analyzeSpoofingComposite({
+    fromHeader: headers.from,
+    replyTo: headers.replyTo,
+    returnPath: headers.returnPath,
+    smtpEnvelopeFrom,
+    bodyText: [headers.subject || "", bodyText].join(" "),
+    basicSignals: basicSpoofing.signals,
+  });
+
+  // Step F3: SMTP relay anomalies
+  const rawAnomalies = analyzeSmtpAnomalies(smtpPath);
+  const smtpAnomalies = dedupeAnomalies(rawAnomalies);
+
+  // Step F4: Attachment structural analysis (never decodes content)
+  const mimeParts = extractMimeAttachments(rawEmailInput);
+  const attachments = mimeParts.map(analyzeAttachmentStructure);
+
+  // Step F5: Entity extraction (pattern-based)
+  const entities = extractEntities({
+    text: [headers.subject || "", bodyText].join(" "),
+    headersDomain: headers.from,
+  });
+
+  // Step G: Phishing scoring over subject + entire raw input, via the
+  // pluggable NLP provider (deterministic keyword classifier by default).
   const contentToScore = [
     headers.subject || "",
     rawEmailInput,
   ].join(" ");
-  const phishing = scorePhishing(contentToScore);
-
-  /* Step G2: Harassment / threat scoring.
-   *
-   * Reuses the same engine that powers /detector, so blackmail,
-   * stalking, sexual harassment and violence — in English or Hinglish —
-   * are detected in email too. The body is scored rather than the raw
-   * source, so header boilerplate cannot trip the rules. */
-  const bodyText = extractBodyText(rawEmailInput);
-  const harassmentInput = [headers.subject || "", bodyText].join("\n").trim();
-  const harassment =
-    harassmentInput.length > 0 ? analyzeMessage(harassmentInput) : null;
+  const nlp = await analyzePhishingNlp(contentToScore);
+  const phishing: PhishingResult = {
+    score: nlp.rawScore,
+    triggers: nlp.detail.map((d) => d.phrase),
+  };
 
   // Step H: Originating IP — the last external hop typically carries the real sender IP
   const allIps = extractIpAddresses(headers.rawHeaders);
@@ -538,19 +517,92 @@ export async function analyzeEmail(rawEmailInput: string): Promise<EmailAnalysis
   const { score: threatScore, level: threatLevel } = computeThreatScore(
     authentication,
     spoofing,
-    phishing,
-    harassment
+    phishing
   );
 
-  // Step K: Build findings and recommendations
-  const findings = buildFindings(
-    authentication,
+  // Step J2: Explainable score breakdown + confidence
+  const urlSuspiciousCount = indicators.filter(
+    (i) => i.type === "url" && i.malicious === true
+  ).length;
+  const attachmentFlags = attachments.filter((a) => a.suspicious).length;
+  const smtpHighAnomalies = smtpAnomalies.filter((a) => a.severity === "HIGH").length;
+  const smtpMediumAnomalies = smtpAnomalies.filter((a) => a.severity === "MEDIUM").length;
+
+  const domainSuspicious =
+    Boolean(senderDomain) &&
+    (domainIntelligence?.suspicious === true ||
+      /\.(xyz|top|tk|ml|ga|cf|gq|ru|cn|pw|cc|bid|review|loan|win|stream|rest|cyou|icu|buzz|one|site|online|club|live)$/i.test(senderDomain as string));
+
+  const scoreBreakdown = buildScoreBreakdown({
+    auth: authentication,
+    spoofingGroupPoints: spoofing.signals.length * 15,
+    spoofingSignals: spoofing.signals.length,
+    phishingAdjusted: Math.round(phishing.score * 0.4),
+    smtpHighAnomalies,
+    smtpMediumAnomalies,
+    urlSuspiciousCount,
+    attachmentFlags,
+    domainSuspicious,
+  });
+
+  const verdict = buildVerdict({
+    score: threatScore,
+    level: threatLevel,
+    scoreBreakdown,
     spoofing,
-    phishing,
-    !!originatingIP,
-    harassment
-  );
+    smtpHighAnomalies,
+    urlSuspiciousCount,
+    attachmentFlags,
+  });
+
+  // Step K: Build findings and recommendations
+  const findings = buildFindings(authentication, spoofing, phishing, !!originatingIP);
   const recommendations = buildRecommendations(threatLevel, spoofing);
+
+  // Step K2: Structured, evidence-backed findings
+  const structuredFindings = buildStructuredFindings({
+    authentication,
+    spoofingSignals: spoofing.signals,
+    spoofingComposite: spoofing,
+    smtpAnomalies,
+    phishingTriggers: phishing.triggers,
+    urlSuspiciousCount,
+    attachments,
+    domainSuspicious,
+    hasOriginatingIp: !!originatingIP,
+  });
+
+  // Step K3: Structured URL risk (shape analysis only — URLs are never opened)
+  const urlRisk = analyzeUrlRisk(
+    indicators,
+    spoofing.brandsLikelyImpersonated.length > 0
+      ? spoofing.brandsLikelyImpersonated.map((b) => `${b}.com`)
+      : []
+  );
+  for (const urlEntry of urlRisk) {
+    if (urlEntry.severity === "LOW") continue;
+    structuredFindings.unshift({
+      id: "FND-URL-" + structuredFindings.length + "-" + Math.floor(Math.random() * 1000),
+      category: "URL" as const,
+      severity: urlEntry.severity,
+      confidence: urlEntry.confidence,
+      description: `URL in the message body raises structured risk flags (${urlEntry.flags.length}).`,
+      technicalEvidence: urlEntry.evidence + "  [" + urlEntry.url + "]",
+      humanExplanation:
+        "Cyber Sakhi inspected the shape of a link in this email (it does not open or follow links). These patterns are common in phishing, but they are signals, not proof.",
+      recommendedAction:
+        "Do not click the link. If it claims to be from an organization you use, open that organization's app/website yourself instead.",
+    });
+  }
+
+  // Attach the explainable NLP payload (model name + per-trigger evidence).
+  const nlpPayload = {
+    ...nlp,
+    defaultDisclaimer:
+      "Powered by " +
+      activePhishingProviderLabel() +
+      ". A trigger is a linguistic signal; it is not proof of fraud.",
+  };
 
   // Step L: Correlate extracted indicators with forensic findings
   const indicatorCorrelations = correlateIndicators(indicators, findings);
@@ -562,7 +614,11 @@ export async function analyzeEmail(rawEmailInput: string): Promise<EmailAnalysis
     authentication,
     senderDomain,
     senderSpoofingDetected: spoofing.detected,
+    spoofing,
     smtpPath,
+    smtpAnomalies,
+    attachments,
+    entities,
     originatingIP,
     ipIntelligence,
     domainIntelligence,
@@ -571,28 +627,14 @@ export async function analyzeEmail(rawEmailInput: string): Promise<EmailAnalysis
     indicators,
     threatLevel,
     threatScore,
-    harassment: harassment
-      ? {
-          level: harassment.threatLevel,
-          score: harassment.score,
-          categories: harassment.categories,
-          triggers: harassment.triggers,
-          legalSections: harassment.legalSections,
-          summary: harassment.summary,
-        }
-      : undefined,
+    scoreBreakdown,
+    verdict,
     findings,
+    structuredFindings,
     recommendations,
+    nlp: nlpPayload,
+    urlRisk,
   };
-}
-
-/**
- * Everything after the first blank line is the body. Header text is
- * excluded so boilerplate cannot trigger the harassment rules.
- */
-function extractBodyText(raw: string): string {
-  const split = raw.search(/\r?\n\r?\n/);
-  return split === -1 ? "" : raw.slice(split).trim();
 }
 
 // ---------------------------------------------------------------------------

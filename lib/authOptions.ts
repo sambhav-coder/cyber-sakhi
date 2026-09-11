@@ -1,13 +1,21 @@
 import { NextAuthOptions } from "next-auth";
 import CredentialsProvider from "next-auth/providers/credentials";
 import GoogleProvider from "next-auth/providers/google";
-import { upsertOAuthProfile } from "./db/profiles";
-import { findUserByEmail, verifyUserPassword, isAdminEmail } from "./userStore";
+import { findProfileByEmail } from "./db/profiles";
+import {
+  findUserByEmail,
+  findUserBySakhiNumber,
+  verifyUserPassword,
+  isAdminEmail,
+} from "./userStore";
 import {
   DEV_LOGIN_PROVIDER_ID,
   findDevPersona,
   isDevLoginEnabled,
 } from "./devAuth";
+
+const SAKHI_NUMBER_REGEX = /^SAKHI-2026-[A-Z0-9]{5}$/i;
+const GENERIC_AUTH_ERROR = "Invalid credentials.";
 
 /**
  * Local-only sign-in that skips Supabase entirely. Spread into the
@@ -42,7 +50,7 @@ export const authOptions: NextAuthOptions = {
   // In production on Vercel, this should be set to the canonical domain URL
   // If not set, NextAuth will attempt to infer it from the request
   providers: [
-    // 1. Google OAuth Provider
+    // 1. Google OAuth Provider (signup only — the login page does not list it)
     GoogleProvider({
       clientId: process.env.GOOGLE_CLIENT_ID || "demo-google-client-id",
       clientSecret: process.env.GOOGLE_CLIENT_SECRET || "demo-google-client-secret",
@@ -55,26 +63,44 @@ export const authOptions: NextAuthOptions = {
       },
     }),
 
-    // 2. Email + Password Credentials Provider
+    // 2. Sakhi Number & Password Credentials Provider
+    //    Primary lookup: Sakhi Number.
+    //    Email fallback kept for backward compat with pre-existing demo seed accounts
+    //    (admin@cybersakhi.org / user@cybersakhi.org) that were created before the
+    //    Sakhi Number concept was introduced. The UI only advertises Sakhi Number.
     CredentialsProvider({
-      name: "Email & Password",
+      id: "credentials",
+      name: "Sakhi Number & Password",
       credentials: {
-        email: { label: "Email", type: "email", placeholder: "you@example.com" },
+        identifier: {
+          label: "Sakhi Number",
+          type: "text",
+          placeholder: "SAKHI-2026-XXXXX",
+        },
         password: { label: "Password", type: "password" },
       },
       async authorize(credentials) {
-        if (!credentials?.email || !credentials?.password) {
-          throw new Error("Please enter both email and password.");
+        if (!credentials?.identifier || !credentials?.password) {
+          throw new Error(GENERIC_AUTH_ERROR);
         }
 
-        const user = await findUserByEmail(credentials.email);
+        const identifier = String(credentials.identifier).trim();
+        const password = String(credentials.password);
+
+        let user = undefined;
+        if (SAKHI_NUMBER_REGEX.test(identifier)) {
+          user = await findUserBySakhiNumber(identifier.toUpperCase());
+        } else {
+          user = await findUserByEmail(identifier);
+        }
+
         if (!user || !user.passwordHash) {
-          throw new Error("Invalid email or password.");
+          throw new Error(GENERIC_AUTH_ERROR);
         }
 
-        const isValid = await verifyUserPassword(credentials.password, user.passwordHash);
+        const isValid = await verifyUserPassword(password, user.passwordHash);
         if (!isValid) {
-          throw new Error("Invalid email or password.");
+          throw new Error(GENERIC_AUTH_ERROR);
         }
 
         return {
@@ -95,29 +121,20 @@ export const authOptions: NextAuthOptions = {
     async jwt({ token, user, account }) {
       if (account?.provider === "google") {
         const email = (user?.email || token.email || "").toLowerCase().trim();
-        console.log("[NextAuth JWT] Google OAuth callback - email:", email);
 
-        if (email) {
-          try {
-            console.log("[NextAuth JWT] Attempting profile upsert for:", email);
-            const profile = await upsertOAuthProfile({
-              email,
-              name: user?.name || token.name || email,
-              image: user?.image || null,
-            });
-            token.id = profile.id;
-            token.role = profile.role;
-            token.sakhiNumber = profile.sakhiNumber;
-            console.log("[NextAuth JWT] Profile upsert successful - id:", profile.id, "role:", profile.role, "sakhi:", profile.sakhiNumber);
-          } catch (error) {
-            console.error("[NextAuth JWT] Failed to upsert OAuth profile:", error);
-            token.role = isAdminEmail(email) ? "ADMIN" : "USER";
-            token.id = token.sub || user?.id || "";
-            console.log("[NextAuth JWT] Using fallback - id:", token.id, "role:", token.role);
-          }
-        } else {
-          token.role = isAdminEmail(token.email || "") ? "ADMIN" : "USER";
-          console.log("[NextAuth JWT] No email available, using fallback role:", token.role);
+        // Read-only profile lookup. We deliberately do NOT create/upsert a
+        // profiles row here: age is mandatory for Cyber Sakhi signup and the
+        // Google callback cannot provide it, so a partial account must not be
+        // silently created. The /api/auth/google-signup route completes the
+        // signup (age step → password hash → Sakhi Number) instead.
+        try {
+          const existing = email ? await findProfileByEmail(email) : undefined;
+          token.id = existing?.id || token.sub || user?.id || "";
+          token.role = existing?.role || (isAdminEmail(email) ? "ADMIN" : "USER");
+          token.sakhiNumber = existing?.sakhiNumber;
+        } catch {
+          token.role = isAdminEmail(email) ? "ADMIN" : "USER";
+          token.id = token.sub || user?.id || "";
         }
         return token;
       }
@@ -126,12 +143,10 @@ export const authOptions: NextAuthOptions = {
         token.id = user.id;
         token.role = user.role;
         token.sakhiNumber = (user as any).sakhiNumber;
-        console.log("[NextAuth JWT] Credentials login - id:", user.id, "role:", user.role, "sakhi:", (user as any).sakhiNumber);
       }
 
       if (!token.role) {
         token.role = "USER";
-        console.log("[NextAuth JWT] No role set, using fallback USER");
       }
 
       return token;
@@ -142,13 +157,16 @@ export const authOptions: NextAuthOptions = {
         session.user.id = (token.id as string) || (token.sub as string) || "";
         session.user.role = (token.role as "USER" | "ADMIN") || "USER";
         session.user.sakhiNumber = token.sakhiNumber as string | undefined;
-        console.log("[NextAuth Session] Session created - id:", session.user.id, "role:", session.user.role, "sakhi:", session.user.sakhiNumber);
       }
       return session;
     },
-    
+
     async redirect({ url, baseUrl }) {
-      console.log("[NextAuth Redirect] Redirect callback - url:", url, "baseUrl:", baseUrl);
+      // Google signup lands back on /signup?google=true — preserve the query
+      // so the one-time credentials popup flow can continue.
+      if (url.startsWith("/signup")) {
+        return `${baseUrl}${url}`;
+      }
       // Allows relative callback URLs
       if (url.startsWith("/")) return `${baseUrl}${url}`;
       // Allows callback URLs on the same origin
@@ -169,7 +187,7 @@ export const authOptions: NextAuthOptions = {
   },
 
   secret: process.env.NEXTAUTH_SECRET || "cyber-sakhi-security-secret-key-2026-auth",
-  
+
   // Debug: log NEXTAUTH_URL in development to help diagnose OAuth issues
   debug: process.env.NODE_ENV === "development",
 };

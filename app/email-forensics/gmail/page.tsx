@@ -495,7 +495,7 @@ export default function GmailForensicsPage() {
             <button
               type="button"
               onClick={handleConnectGmail}
-              className="inline-flex items-center justify-center gap-2 px-5 py-2.5 rounded-xl bg-purple-600 hover:bg-purple-500 text-white text-xs font-bold transition shadow-lg shadow-purple-950/30"
+              className="inline-flex items-center justify-center gap-2 px-5 py-2.5 rounded-xl bg-emergency-600 hover:bg-emergency-500 text-white text-xs font-bold transition shadow-lg shadow-emergency-950/30"
             >
               <ShieldCheck className="w-4 h-4" />
               Connect Gmail
@@ -503,7 +503,7 @@ export default function GmailForensicsPage() {
           </div>
         ) : (
           <div className="flex items-center gap-3 text-slate-300">
-            <Loader2 className="w-5 h-5 animate-spin text-purple-400" />
+            <Loader2 className="w-5 h-5 animate-spin text-emergency-400" />
 
             <span className="text-sm">Checking Gmail connection...</span>
           </div>
@@ -523,7 +523,7 @@ export default function GmailForensicsPage() {
             <aside className="w-full lg:w-60 shrink-0 border-b lg:border-b-0 lg:border-r border-slate-800/70 bg-slate-950/40 p-3 lg:p-4 space-y-1">
               <button
                 type="button"
-                className="w-full mb-2 inline-flex items-center justify-center gap-2 px-4 py-2.5 rounded-xl bg-purple-600 hover:bg-purple-500 text-white text-xs font-bold transition shadow-lg shadow-purple-950/30 disabled:opacity-60 cursor-not-allowed"
+                className="w-full mb-2 inline-flex items-center justify-center gap-2 px-4 py-2.5 rounded-xl bg-emergency-600 hover:bg-emergency-500 text-white text-xs font-bold transition shadow-lg shadow-emergency-950/30 disabled:opacity-60 cursor-not-allowed"
                 disabled
                 title="Forensic investigation is read-only — sending is disabled in Cyber Sakhi"
               >
@@ -579,13 +579,13 @@ export default function GmailForensicsPage() {
                         onClick={() => setSidebarFolder(key)}
                         className={`w-full inline-flex items-center gap-2.5 px-3 py-2 rounded-lg transition ${
                           active
-                            ? "bg-purple-950/60 text-purple-200 border border-purple-700/40 font-bold"
+                            ? "bg-emergency-950/50 text-emergency-200 border border-emergency-700/40 font-bold"
                             : "text-slate-300 hover:bg-slate-800/60 hover:text-slate-100 border border-transparent"
                         }`}
                       >
                         <Icon
                           className={`w-3.5 h-3.5 shrink-0 ${
-                            active ? "text-purple-400" : "text-slate-400"
+                            active ? "text-emergency-400" : "text-slate-400"
                           }`}
                         />
                         <span className="flex-1 text-left truncate">
@@ -595,7 +595,7 @@ export default function GmailForensicsPage() {
                           <span
                             className={`text-[10px] font-black tracking-wide px-1.5 py-0.5 rounded-md ${
                               active
-                                ? "bg-purple-500/30 text-purple-200"
+                                ? "bg-emergency-500/30 text-emergency-200"
                                 : "bg-slate-800 text-slate-300"
                             }`}
                           >
@@ -665,7 +665,7 @@ export default function GmailForensicsPage() {
                     value={searchQuery}
                     onChange={(e) => setSearchQuery(e.target.value)}
                     placeholder="Search sender, subject, preview…"
-                    className="w-full pl-9 pr-9 py-2 rounded-xl bg-slate-800/80 border border-slate-700 text-xs text-slate-100 placeholder:text-slate-500 focus:outline-none focus:border-purple-500 focus:ring-1 focus:ring-purple-500/30"
+                    className="w-full pl-9 pr-9 py-2 rounded-xl bg-slate-800/80 border border-slate-700 text-xs text-slate-100 placeholder:text-slate-500 focus:outline-none focus:border-emergency-500 focus:ring-1 focus:ring-emergency-500/30"
                   />
                   {searchQuery ? (
                     <button
@@ -687,7 +687,7 @@ export default function GmailForensicsPage() {
                     <input
                       id="select-all-visible"
                       type="checkbox"
-                      className="w-3.5 h-3.5 rounded accent-purple-500 cursor-pointer"
+                      className="w-3.5 h-3.5 rounded accent-emergency-500 cursor-pointer"
                       checked={allVisibleSelected}
                       ref={(el) => {
                         if (el) el.indeterminate = someVisibleSelected;
@@ -733,7 +733,7 @@ export default function GmailForensicsPage() {
 
               <div className="flex items-center justify-between px-3 lg:px-4 py-2 border-b border-slate-800/50 bg-slate-900/30">
                 <div className="text-[11px] font-semibold uppercase tracking-widest text-slate-400 flex items-center gap-2">
-                  <InboxIcon className="w-3.5 h-3.5 text-purple-400" />
+                  <InboxIcon className="w-3.5 h-3.5 text-emergency-400" />
                   {sidebarFolder === "ALL"
                     ? "All Mail"
                     : sidebarFolder === "STARRED"
@@ -757,7 +757,7 @@ export default function GmailForensicsPage() {
               <div className="flex-1 min-h-[320px]">
                 {isLoading ? (
                   <div className="flex items-center justify-center py-20 text-slate-400">
-                    <Loader2 className="w-5 h-5 animate-spin mr-2 text-purple-400" />
+                    <Loader2 className="w-5 h-5 animate-spin mr-2 text-emergency-400" />
                     <span className="text-xs">Loading Gmail messages…</span>
                   </div>
                 ) : visibleCount === 0 ? (
@@ -836,14 +836,14 @@ export default function GmailForensicsPage() {
                           onClick={() => handleAnalyze(message.id)}
                           className={`group relative cursor-pointer transition-colors ${
                             isSelected
-                              ? "bg-purple-950/40"
+                              ? "bg-emergency-950/30"
                               : "hover:bg-slate-800/40"
                           } ${isUnread ? "bg-slate-900/60" : "bg-slate-900/10"}`}
                         >
                           <div
                             className={`grid grid-cols-[auto_auto_minmax(0,1fr)_auto] lg:grid-cols-[auto_auto_minmax(0,1.2fr)_minmax(0,2fr)_auto] items-center gap-2 lg:gap-3 px-3 lg:px-4 py-2.5 ${
                               isUnread
-                                ? "shadow-[inset_3px_0_0_0_rgb(168_85_247_/_0.55)]"
+                                ? "shadow-[inset_3px_0_0_0_rgb(239_68_68_/_0.55)]"
                                 : ""
                             }`}
                           >
@@ -853,7 +853,7 @@ export default function GmailForensicsPage() {
                             >
                               <input
                                 type="checkbox"
-                                className="w-3.5 h-3.5 rounded accent-purple-500 cursor-pointer"
+                                className="w-3.5 h-3.5 rounded accent-emergency-500 cursor-pointer"
                                 aria-label={`Select message from ${sender.displayName}`}
                                 checked={isSelected}
                                 onChange={(e) =>
@@ -985,7 +985,7 @@ export default function GmailForensicsPage() {
                                 ) : null}
                                 {isUnread ? (
                                   <span
-                                    className="inline-flex items-center lg:hidden w-2 h-2 rounded-full bg-purple-500 shadow shadow-purple-500/50"
+                                    className="inline-flex items-center lg:hidden w-2 h-2 rounded-full bg-emergency-400 shadow shadow-emergency-500/50"
                                     aria-label="Unread"
                                   />
                                 ) : null}
@@ -1014,7 +1014,7 @@ export default function GmailForensicsPage() {
                                   void handleAnalyze(message.id);
                                 }}
                                 disabled={isAnalyzing}
-                                className="hidden lg:inline-flex items-center gap-1.5 mt-1 px-2.5 py-1 rounded-lg text-[10px] font-bold transition border whitespace-nowrap disabled:opacity-70 disabled:cursor-wait bg-purple-950/70 border-purple-700/50 text-purple-200 hover:bg-purple-900/80 hover:border-purple-600/70 hover:text-white shadow-sm shadow-purple-950/40"
+                                className="hidden lg:inline-flex items-center gap-1.5 mt-1 px-2.5 py-1 rounded-lg text-[10px] font-bold transition border whitespace-nowrap disabled:opacity-70 disabled:cursor-wait bg-emergency-950/60 border-emergency-700/50 text-emergency-200 hover:bg-emergency-900/80 hover:border-emergency-600/70 hover:text-white shadow-sm shadow-emergency-950/40"
                               >
                                 {isAnalyzing ? (
                                   <>
@@ -1035,7 +1035,7 @@ export default function GmailForensicsPage() {
                             type="button"
                             onClick={() => handleAnalyze(message.id)}
                             disabled={isAnalyzing}
-                            className="lg:hidden w-full flex items-center justify-center gap-2 border-t border-slate-800/40 bg-slate-950/40 px-3 py-2 text-[11px] font-bold text-purple-200 hover:bg-purple-950/50 disabled:opacity-70 disabled:cursor-wait"
+                            className="lg:hidden w-full flex items-center justify-center gap-2 border-t border-slate-800/40 bg-slate-950/40 px-3 py-2 text-[11px] font-bold text-emergency-200 hover:bg-emergency-950/50 disabled:opacity-70 disabled:cursor-wait"
                           >
                             {isAnalyzing ? (
                               <>

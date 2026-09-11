@@ -21,11 +21,10 @@ import {
   FileText,
 } from "lucide-react";
 import { ThreatBadge } from "@/components/ThreatBadge";
-import { OffenderNetworkPanel } from "@/components/OffenderNetworkPanel";
 import { analyzeMessage } from "@/lib/threatEngine";
 import { ThreatAnalysisResult, EvidenceItem } from "@/lib/types";
 import { addEvidenceItem, addScanHistoryItem, getStoredScanHistory } from "@/lib/storage";
-import { computeSha256, generateMockIpfsCid, generateMockTxHash } from "@/lib/cryptoUtils";
+import { computeSha256 } from "@/lib/cryptoUtils";
 
 function DetectorContent() {
   const searchParams = useSearchParams();
@@ -93,13 +92,37 @@ function DetectorContent() {
           : result.riskFactors.financialScam > 0
           ? "SCAM"
           : "HARASSMENT",
-      notes: `Automated scan score: ${result.score}/100. Legal sections: ${result.legalSections.map((s) => s.code).join(", ")}. Text snippet: "${result.text.substring(0, 100)}..."`,
+notes: `Automated scan score: ${result.score}/100. Legal sections: ${result.legalSections.map((s) => s.code).join(", ")}. Text snippet: "${result.text.substring(0, 100)}..."`,
       integrityVerified: true,
-      simulatedIpfsCid: generateMockIpfsCid(sha),
-      simulatedTxHash: generateMockTxHash(sha),
+      encrypted: false,
+      evidenceCode: "",
+      locked: false,
+      lockedAt: null,
+      caseId: null,
     };
 
     addEvidenceItem(newEvidence);
+
+    // Best-effort server-side copy so the artifact lands in the secure
+    // Evidence Locker (metadata only — content stays in the browser).
+    try {
+      await fetch("/api/evidence", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({
+          title: newEvidence.title,
+          filename: newEvidence.filename,
+          fileType: newEvidence.fileType,
+          fileSize: newEvidence.fileSize,
+          sha256Hash: newEvidence.sha256Hash,
+          category: newEvidence.category,
+          notes: newEvidence.notes,
+        }),
+      });
+    } catch (err) {
+      console.warn("Could not post scan evidence to secure vault:", err);
+    }
+
     setSavedLockerSuccess(true);
     setTimeout(() => setSavedLockerSuccess(false), 4000);
   };
@@ -414,23 +437,6 @@ function DetectorContent() {
                     ))}
                   </ul>
                 </div>
-
-                {/* Sakhi Network: has anyone else reported these identifiers? */}
-                <OffenderNetworkPanel
-                  key={result.id}
-                  text={result.text}
-                  category={
-                    result.riskFactors.blackmail > 0
-                      ? "BLACKMAIL"
-                      : result.riskFactors.stalking > 0
-                      ? "STALKING"
-                      : result.riskFactors.financialScam > 0
-                      ? "SCAM"
-                      : result.threatLevel === "SAFE"
-                      ? "OTHER"
-                      : "HARASSMENT"
-                  }
-                />
 
                 {/* Direct Action Buttons */}
                 <div className="space-y-2 pt-2 border-t border-purple-900/40">

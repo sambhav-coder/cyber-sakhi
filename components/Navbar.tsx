@@ -21,10 +21,12 @@ import {
   LogOut,
   User,
   Mail,
+  KeyRound,
 } from "lucide-react";
 
 import { CyberSakhiLogo } from "./CyberSakhiLogo";
 import { SOSModal } from "./SOSModal";
+import { ChangePasswordModal } from "./ChangePasswordModal";
 
 export const Navbar: React.FC = () => {
   const pathname = usePathname();
@@ -32,6 +34,7 @@ export const Navbar: React.FC = () => {
   const [isSosOpen, setIsSosOpen] = useState(false);
   const [isMobileMenuOpen, setIsMobileMenuOpen] = useState(false);
   const [isUserMenuOpen, setIsUserMenuOpen] = useState(false);
+  const [isChangePasswordModalOpen, setIsChangePasswordModalOpen] = useState(false);
 
   const isAdmin = session?.user?.role === "ADMIN";
 
@@ -45,7 +48,7 @@ export const Navbar: React.FC = () => {
     { href: "/contacts", label: "Contacts", icon: Users },
     { href: "/dashboard", label: "Dashboard", icon: LayoutDashboard },
     { href: "/admin", label: "Admin Portal", icon: ShieldAlert, adminOnly: true },
-    { href: "/developer", label: "SDK / API", icon: Code },
+    { href: "/developer", label: "SDK / API", icon: Code, adminOnly: true },
   ];
 
   // RBAC Filter: Only render Admin Portal for authenticated ADMIN users
@@ -151,6 +154,17 @@ export const Navbar: React.FC = () => {
                           <span>Admin Incident Portal</span>
                         </Link>
                       )}
+
+                      <button
+                        onClick={() => {
+                          setIsUserMenuOpen(false);
+                          setIsChangePasswordModalOpen(true);
+                        }}
+                        className="w-full flex items-center gap-2 px-3 py-2 rounded-xl text-slate-300 hover:bg-slate-800/60 font-medium transition"
+                      >
+                        <KeyRound className="w-3.5 h-3.5" />
+                        <span>Change Password</span>
+                      </button>
 
                       <button
                         onClick={() => {
@@ -267,6 +281,12 @@ export const Navbar: React.FC = () => {
 
       {/* Global SOS Modal */}
       <SOSModal isOpen={isSosOpen} onClose={() => setIsSosOpen(false)} />
+
+      {/* Change Password Modal */}
+      <ChangePasswordModal
+        isOpen={isChangePasswordModalOpen}
+        onClose={() => setIsChangePasswordModalOpen(false)}
+      />
     </>
   );
-};
+}

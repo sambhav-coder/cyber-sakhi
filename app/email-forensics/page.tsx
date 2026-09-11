@@ -2,6 +2,7 @@
 
 import React, { useEffect, useState } from "react";
 import { useRouter } from "next/navigation";
+import Link from "next/link";
 import {
   Mail,
   Search,
@@ -27,24 +28,18 @@ import {
   Loader2,
   ArrowRight,
   Inbox as InboxIcon,
+  FolderOpen,
 } from "lucide-react";
 import { EmailAnalysisResult, AuthenticationResult, SMTPHop, ThreatIndicator } from "@/lib/emailTypes";
 import { addEvidenceItem } from "@/lib/storage";
-import { computeSha256, generateMockIpfsCid, generateMockTxHash } from "@/lib/cryptoUtils";
+import { computeSha256 } from "@/lib/cryptoUtils";
 import { EvidenceItem } from "@/lib/types";
+import { SectionHeader } from "@/components/ui/SectionHeader";
+import { EyebrowBadge } from "@/components/ui/EyebrowBadge";
 
 // ---------------------------------------------------------------------------
 // Sub-components
 // ---------------------------------------------------------------------------
-
-function SectionHeader({ title, icon: Icon }: { title: string; icon: React.ElementType }) {
-  return (
-    <div className="flex items-center gap-2 pb-2 border-b border-slate-800 mb-4">
-      <Icon className="w-4 h-4 text-purple-400" />
-      <h3 className="text-sm font-bold text-slate-200 uppercase tracking-wider">{title}</h3>
-    </div>
-  );
-}
 
 function DataRow({
   label,
@@ -157,7 +152,7 @@ function SMTPHopCard({ hop, index, total }: { hop: SMTPHop; index: number; total
             {isLast ? "Outermost Observed Hop" : `Hop ${total - index}`}
           </span>
           {hop.ip && (
-            <span className="font-mono text-purple-300 bg-purple-950/50 px-2 py-0.5 rounded border border-purple-800/40">
+            <span className="font-mono text-emergency-300 bg-emergency-950/50 px-2 py-0.5 rounded border border-emergency-800/40">
               {hop.ip}
             </span>
           )}
@@ -268,6 +263,14 @@ export default function EmailForensicsPage() {
   const [saveSuccess, setSaveSuccess] = useState(false);
   const [saveError, setSaveError] = useState<string | null>(null);
   const [savedEvidenceId, setSavedEvidenceId] = useState<string | null>(null);
+  const [caseLink, setCaseLink] = useState<{
+    id: string;
+    caseNumber: string | null;
+    title: string | null;
+    threatType: string | null;
+    severity: string | null;
+  } | null>(null);
+  const [caseSaveError, setCaseSaveError] = useState<string | null>(null);
 
   useEffect(() => {
     try {
@@ -295,12 +298,14 @@ export default function EmailForensicsPage() {
     setIsAnalyzing(true);
     setResult(null);
     setError(null);
+    setCaseLink(null);
+    setCaseSaveError(null);
 
     try {
       const res = await fetch("/api/email-forensics", {
         method: "POST",
         headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({ rawEmail: rawEmail.trim() }),
+        body: JSON.stringify({ rawEmail: rawEmail.trim(), saveAsCase: true }),
       });
 
       const data = await res.json();
@@ -309,6 +314,17 @@ export default function EmailForensicsPage() {
         setError(data.error || "Analysis failed. Please check your input.");
       } else {
         setResult(data as EmailAnalysisResult);
+        if (data.case?.id) {
+          setCaseLink({
+            id: data.case.id,
+            caseNumber: data.case.caseNumber || null,
+            title: data.case.title || null,
+            threatType: data.case.threatType || null,
+            severity: data.case.severity || null,
+          });
+        } else if (data.caseSaveError) {
+          setCaseSaveError(String(data.caseSaveError));
+        }
       }
     } catch (err) {
       setError("Network error. Please check your connection and try again.");
@@ -375,8 +391,6 @@ ${result.indicators.map(i => `• ${i.type}: ${i.value}${i.malicious ? " (SUSPIC
       // Compute SHA-256 hash of the analysis result
       const analysisString = JSON.stringify(result);
       const sha256 = await computeSha256(analysisString);
-      const ipfsCid = generateMockIpfsCid(sha256);
-      const txHash = generateMockTxHash(sha256);
 
       // Determine category based on threat level
       const categoryMap: Record<string, EvidenceItem["category"]> = {
@@ -400,12 +414,38 @@ ${result.indicators.map(i => `• ${i.type}: ${i.value}${i.malicious ? " (SUSPIC
         category: category,
         notes: notes,
         integrityVerified: true,
-        simulatedIpfsCid: ipfsCid,
-        simulatedTxHash: txHash,
+        encrypted: false,
+        evidenceCode: "",
+        locked: false,
+        lockedAt: null,
+        caseId: null,
       };
 
       // Save to evidence locker
       addEvidenceItem(newEvidence);
+
+      // Best-effort server-side link so this evidence lands in the secure
+      // vault (optionally attached to the case created during this
+      // investigation). A failure here is non-fatal — the local vault copy
+      // is already saved, and the vault itself always shows the honest state.
+      try {
+        await fetch("/api/evidence", {
+          method: "POST",
+          headers: { "Content-Type": "application/json" },
+          body: JSON.stringify({
+            title: newEvidence.title,
+            filename: newEvidence.filename,
+            fileType: newEvidence.fileType,
+            fileSize: newEvidence.fileSize,
+            sha256Hash: newEvidence.sha256Hash,
+            category: newEvidence.category,
+            notes: newEvidence.notes,
+            ...(caseLink?.id ? { caseId: caseLink.id } : {}),
+          }),
+        });
+      } catch (err) {
+        console.warn("Could not link evidence to secure vault:", err);
+      }
       
       // Mark as saved to prevent duplicates
       setSavedEvidenceId(newEvidence.id);
@@ -448,10 +488,9 @@ ${result.indicators.map(i => `• ${i.type}: ${i.value}${i.malicious ? " (SUSPIC
     <div className="space-y-8 animate-in fade-in duration-300">
       {/* Page Header */}
       <div className="space-y-2">
-        <div className="inline-flex items-center gap-2 px-3 py-1 rounded-full bg-purple-950/80 border border-purple-500/40 text-purple-300 text-xs font-semibold">
-          <Mail className="w-3.5 h-3.5" />
+        <EyebrowBadge icon={Mail}>
           <span>Email Forensic Investigator</span>
-        </div>
+        </EyebrowBadge>
         <h1 className="text-2xl sm:text-3xl font-extrabold text-white">
           {showPasteMode ? "Paste Raw Email" : result ? "Email Forensic Report" : "Email Forensics"}
         </h1>
@@ -460,6 +499,11 @@ ${result.indicators.map(i => `• ${i.type}: ${i.value}${i.malicious ? " (SUSPIC
             ? "Paste the full raw email source below and run Cyber Sakhi's forensic analysis engine on it."
             : result
             ? "Forensic results for the email you analyzed. Review authentication, SMTP path, indicators, risk score, and recommendations."
+            : "Something in this email doesn't look right? Let's investigate it together."}
+        </p>
+        <p className="text-xs text-slate-400 max-w-2xl">
+          {result
+            ? null
             : "Investigate suspicious email with Cyber Sakhi's unified forensic engine — either paste a raw email source directly, or connect Gmail and analyze a message from your real inbox. Both methods run the same SPF / DKIM / DMARC, spoofing, SMTP-path, and threat-indicator analysis."}
         </p>
       </div>
@@ -471,16 +515,16 @@ ${result.indicators.map(i => `• ${i.type}: ${i.value}${i.malicious ? " (SUSPIC
             <button
               type="button"
               onClick={selectPasteMode}
-              className="group p-5 rounded-2xl bg-slate-900/80 hover:bg-slate-900 border border-slate-800 hover:border-purple-600/60 space-y-3 flex flex-col text-left transition cursor-pointer"
+              className="group p-5 rounded-2xl bg-slate-900/80 hover:bg-slate-900 border border-slate-800 hover:border-emergency-700/40 space-y-3 flex flex-col text-left transition cursor-pointer"
             >
               <div className="flex items-start gap-3">
-                <div className="w-10 h-10 rounded-xl bg-purple-950/70 border border-purple-700/50 flex items-center justify-center shrink-0">
-                  <FileText className="w-5 h-5 text-purple-300" />
+                <div className="w-10 h-10 rounded-xl bg-emergency-950/50 border border-emergency-700/40 flex items-center justify-center shrink-0">
+                  <FileText className="w-5 h-5 text-emergency-300" />
                 </div>
                 <div className="space-y-1 flex-1 min-w-0">
                   <div className="text-sm font-black text-white flex items-center gap-2">
                     A) Paste Raw Email
-                    <ArrowRight className="w-3.5 h-3.5 text-purple-400 opacity-0 group-hover:opacity-100 translate-x-0 group-hover:translate-x-0.5 transition-all" />
+                    <ArrowRight className="w-3.5 h-3.5 text-emergency-400 opacity-0 group-hover:opacity-100 translate-x-0 group-hover:translate-x-0.5 transition-all" />
                   </div>
                   <p className="text-[12px] text-slate-400 leading-5">
                     Paste the complete raw email source (headers + body) for any email you already have exported. Works with any provider — Gmail, Outlook, Apple Mail, ProtonMail, etc.
@@ -504,10 +548,10 @@ ${result.indicators.map(i => `• ${i.type}: ${i.value}${i.malicious ? " (SUSPIC
               </ul>
 
               <div className="pt-1 mt-auto flex items-center justify-between">
-                <span className="text-[11px] font-semibold text-slate-400 group-hover:text-purple-300 transition">
+                <span className="text-[11px] font-semibold text-slate-400 group-hover:text-emergency-200 transition">
                   Open the Paste Raw Email workflow
                 </span>
-                <div className="inline-flex items-center gap-1.5 text-[11px] font-black px-3 py-1.5 rounded-lg bg-purple-600 hover:bg-purple-500 text-white transition shadow-md shadow-purple-950/50">
+                <div className="inline-flex items-center gap-1.5 text-[11px] font-black px-3 py-1.5 rounded-lg bg-emergency-600 hover:bg-emergency-500 text-white transition shadow-emergency-950/30">
                   <FileText className="w-3.5 h-3.5" />
                   <span>Continue</span>
                 </div>
@@ -517,16 +561,16 @@ ${result.indicators.map(i => `• ${i.type}: ${i.value}${i.malicious ? " (SUSPIC
             <button
               type="button"
               onClick={openGmailInvestigation}
-              className="group p-5 rounded-2xl bg-slate-900/60 hover:bg-slate-900/90 border border-slate-800 hover:border-purple-600/60 space-y-3 flex flex-col text-left transition cursor-pointer"
+              className="group p-5 rounded-2xl bg-slate-900/60 hover:bg-slate-900/90 border border-slate-800 hover:border-emergency-700/40 space-y-3 flex flex-col text-left transition cursor-pointer"
             >
               <div className="flex items-start gap-3">
-                <div className="w-10 h-10 rounded-xl bg-gradient-to-br from-purple-900/90 to-purple-700/80 border border-purple-600/50 flex items-center justify-center shrink-0 shadow-lg shadow-purple-950/40">
+                <div className="w-10 h-10 rounded-xl bg-emergency-950/40 border border-emergency-700/40 flex items-center justify-center shrink-0">
                   <InboxIcon className="w-5 h-5 text-white" />
                 </div>
                 <div className="space-y-1 flex-1 min-w-0">
                   <div className="text-sm font-black text-white flex items-center gap-2">
                     B) Connect Gmail
-                    <ArrowRight className="w-3.5 h-3.5 text-purple-400 opacity-0 group-hover:opacity-100 translate-x-0 group-hover:translate-x-0.5 transition-all" />
+                    <ArrowRight className="w-3.5 h-3.5 text-emergency-400 opacity-0 group-hover:opacity-100 translate-x-0 group-hover:translate-x-0.5 transition-all" />
                   </div>
                   <p className="text-[12px] text-slate-400 leading-5">
                     Securely connect Gmail with read-only access and investigate real suspicious messages from your Gmail inbox. No copying, no exports — point and investigate.
@@ -550,10 +594,10 @@ ${result.indicators.map(i => `• ${i.type}: ${i.value}${i.malicious ? " (SUSPIC
               </ul>
 
               <div className="pt-1 mt-auto flex items-center justify-between">
-                <div className="inline-flex items-center gap-1.5 text-[11px] font-semibold text-slate-400 group-hover:text-purple-300 transition">
+                <div className="inline-flex items-center gap-1.5 text-[11px] font-semibold text-slate-400 group-hover:text-emergency-200 transition">
                   <span>Takes you to the Gmail Investigation workspace</span>
                 </div>
-                <div className="inline-flex items-center gap-1.5 text-[11px] font-black px-3 py-1.5 rounded-lg bg-purple-600 hover:bg-purple-500 text-white transition shadow-md shadow-purple-950/50">
+                <div className="inline-flex items-center gap-1.5 text-[11px] font-black px-3 py-1.5 rounded-lg bg-emergency-600 hover:bg-emergency-500 text-white transition shadow-emergency-950/30">
                   <Mail className="w-3.5 h-3.5" />
                   <span>Open Gmail Investigation</span>
                 </div>
@@ -575,13 +619,13 @@ ${result.indicators.map(i => `• ${i.type}: ${i.value}${i.malicious ? " (SUSPIC
         <div className="p-6 rounded-2xl bg-slate-900/60 border border-slate-800 space-y-4">
           <div className="flex items-center justify-between">
             <h2 className="text-sm font-bold text-slate-200 flex items-center gap-2">
-              <FileText className="w-4 h-4 text-purple-400" />
+              <FileText className="w-4 h-4 text-emergency-400" />
               Paste Raw Email Source
             </h2>
             <button
               type="button"
               onClick={loadSample}
-              className="text-xs text-purple-400 hover:text-purple-300 underline font-medium"
+              className="text-xs text-emergency-400 hover:text-emergency-300 underline font-medium"
             >
               Load phishing sample
             </button>
@@ -597,7 +641,7 @@ ${result.indicators.map(i => `• ${i.type}: ${i.value}${i.malicious ? " (SUSPIC
               onChange={(e) => setRawEmail(e.target.value)}
               placeholder={`Paste the full raw email source here (including headers).\n\nExample:\nReceived: from mail.sender.com ...\nFrom: noreply@sender.com\nSubject: Your account\n...`}
               rows={14}
-              className="w-full rounded-xl bg-[#0a0a16] border border-slate-700/80 p-4 text-xs font-mono text-slate-200 placeholder:text-slate-600 focus:outline-none focus:border-purple-500 resize-y"
+              className="w-full rounded-xl bg-[#0a0a16] border border-slate-700/80 p-4 text-xs font-mono text-slate-200 placeholder:text-slate-600 focus:outline-none focus:border-emergency-500 resize-y"
             />
 
             {error && (
@@ -610,7 +654,7 @@ ${result.indicators.map(i => `• ${i.type}: ${i.value}${i.malicious ? " (SUSPIC
             <button
               type="submit"
               disabled={isAnalyzing || !rawEmail.trim()}
-              className="w-full sm:w-auto px-6 py-2.5 rounded-xl bg-purple-600 hover:bg-purple-500 disabled:opacity-50 text-white font-bold text-xs transition flex items-center justify-center gap-2 shadow-lg shadow-purple-950/40"
+              className="w-full sm:w-auto px-6 py-2.5 rounded-xl bg-emergency-600 hover:bg-emergency-500 disabled:opacity-50 text-white font-bold text-xs transition flex items-center justify-center gap-2 shadow-lg shadow-emergency-950/40"
             >
               {isAnalyzing ? (
                 <>
@@ -631,6 +675,40 @@ ${result.indicators.map(i => `• ${i.type}: ${i.value}${i.malicious ? " (SUSPIC
       {/* Results */}
       {result && (
         <div className="space-y-6">
+          {caseLink && (
+            <div className="p-4 rounded-2xl bg-emergency-950/30 border border-emergency-700/40 flex flex-col sm:flex-row sm:items-center gap-3 justify-between">
+              <div className="flex items-center gap-3 min-w-0">
+                <div className="w-9 h-9 rounded-xl bg-emergency-900/50 border border-emergency-700/40 flex items-center justify-center shrink-0">
+                  <FolderOpen className="w-4 h-4 text-emergency-300" />
+                </div>
+                <div className="min-w-0 space-y-0.5">
+                  <div className="text-xs font-black text-emergency-200">
+                    Case Created: <span className="font-mono">{caseLink.caseNumber}</span>
+                  </div>
+                  <div className="text-[10px] text-emergency-300/80 truncate">
+                    {caseLink.title} · {caseLink.threatType} · severity {caseLink.severity}
+                  </div>
+                </div>
+              </div>
+              <Link
+                href={`/cases/${caseLink.id}`}
+                className="inline-flex items-center gap-1.5 text-xs font-bold text-emergency-200 hover:text-white bg-emergency-900/50 hover:bg-emergency-800 border border-emergency-700/50 px-3 py-2 rounded-xl transition shrink-0"
+              >
+                <FolderOpen className="w-3.5 h-3.5" />
+                Open Case
+              </Link>
+            </div>
+          )}
+          {caseSaveError && (
+            <div className="p-3 rounded-xl bg-amber-950/40 border border-amber-700/50 text-amber-200 text-xs flex items-center gap-2">
+              <AlertTriangle className="w-4 h-4 text-amber-400 shrink-0" />
+              <span>
+                Analysis complete, but the case could not be saved to the database this time ({caseSaveError}).
+                You can still view the forensic report below.
+              </span>
+            </div>
+          )}
+
           {/* ---- Risk Summary Banner ---- */}
           <div className={`p-5 rounded-2xl border ${
             result.threatLevel === "CRITICAL"
@@ -696,7 +774,7 @@ ${result.indicators.map(i => `• ${i.type}: ${i.value}${i.malicious ? " (SUSPIC
                       ? "bg-slate-600 text-slate-300 cursor-not-allowed"
                       : savedEvidenceId !== null
                       ? "bg-emerald-600 text-white cursor-default"
-                      : "bg-purple-600 hover:bg-purple-500 text-white"
+                      : "bg-emergency-600 hover:bg-emergency-500 text-white"
                   }`}
                 >
                   {isSaving ? (
@@ -726,7 +804,62 @@ ${result.indicators.map(i => `• ${i.type}: ${i.value}${i.malicious ? " (SUSPIC
             </div>
           </div>
 
-          {/* ---- Authentication Results ---- */}
+          {/* ---- Verdict: Why Suspicious ---- */}
+          {result.verdict && (
+            <div className="p-5 rounded-2xl bg-sky-950/30 border border-sky-800/50 space-y-4">
+              <SectionHeader title="Why This Email Looks Suspicious" icon={ShieldAlert} />
+
+              <div className="text-sm text-slate-100 font-semibold">
+                {result.verdict.summary}
+              </div>
+
+              {result.verdict.confidence != null && (
+                <div className="text-[11px] text-sky-300">
+                  Analysis confidence {Math.round(result.verdict.confidence * 100)}% —
+                  grounded only in signals actually detected.
+                </div>
+              )}
+
+              {result.verdict.contributingSignals &&
+                result.verdict.contributingSignals.length > 0 && (
+                  <ul className="space-y-1.5">
+                    {result.verdict.contributingSignals.map((signal, i) => (
+                      <li
+                        key={i}
+                        className="text-[11px] text-slate-300 bg-slate-900/70 rounded-lg px-3 py-2 flex items-start gap-2"
+                      >
+                        <span className="text-sky-400 shrink-0 mt-0.5">▸</span>
+                        <span>{signal}</span>
+                      </li>
+                    ))}
+                  </ul>
+                )}
+
+              {result.scoreBreakdown && result.scoreBreakdown.groups.length > 0 && (
+                <div className="pt-1">
+                  <div className="text-[10px] uppercase text-slate-500 font-bold mb-2">
+                    Score contributions (deterministic, capped at 100)
+                  </div>
+                  <div className="space-y-1.5">
+                    {result.scoreBreakdown.groups.map((g, i) => (
+                      <div key={i} className="flex items-center justify-between gap-2 text-[10px]">
+                        <span className="text-slate-400 flex-1">{g.reason}</span>
+                        <span className="font-mono text-emergency-300 shrink-0">+{g.points}</span>
+                      </div>
+                    ))}
+                    <div className="flex items-center justify-between gap-2 text-[11px] border-t border-slate-800 pt-1.5">
+                      <span className="text-slate-300">Total {result.threatScore}/100</span>
+                      <span className={`font-black ${threatColorMap[result.threatLevel]}`}>
+                        {result.threatLevel}
+                      </span>
+                    </div>
+                  </div>
+                </div>
+              )}
+            </div>
+          )}
+
+          {/* ---- Email Authentication (SPF / DKIM / DMARC) ---- */}
           <div className="p-5 rounded-2xl bg-slate-900/60 border border-slate-800 space-y-4">
             <SectionHeader title="Email Authentication (SPF / DKIM / DMARC)" icon={ShieldCheck} />
             <div className="grid grid-cols-1 md:grid-cols-3 gap-4">
@@ -954,12 +1087,12 @@ ${result.indicators.map(i => `• ${i.type}: ${i.value}${i.malicious ? " (SUSPIC
             {/* Originating IP */}
             <div className="pt-2 border-t border-slate-800">
               <div className="text-xs font-bold text-slate-300 mb-2 flex items-center gap-1.5">
-                <Globe className="w-3.5 h-3.5 text-purple-400" />
+                <Globe className="w-3.5 h-3.5 text-emergency-400" />
                 Originating IP
               </div>
               {result.originatingIP ? (
                 <div className="space-y-3">
-                  <div className="font-mono text-purple-300 bg-purple-950/30 border border-purple-800/40 px-3 py-2 rounded-lg text-sm font-bold inline-block">
+                  <div className="font-mono text-emergency-300 bg-emergency-950/30 border border-emergency-800/40 px-3 py-2 rounded-lg text-sm font-bold inline-block">
                     {result.originatingIP}
                   </div>
 
@@ -1008,6 +1141,93 @@ ${result.indicators.map(i => `• ${i.type}: ${i.value}${i.malicious ? " (SUSPIC
               )}
             </div>
           </div>
+
+                    {/* ---- SMTP Relay Anomalies ---- */}
+          {result.smtpAnomalies && result.smtpAnomalies.length > 0 && (
+            <div className="p-5 rounded-2xl bg-slate-900/60 border border-slate-800 space-y-4">
+              <SectionHeader title="SMTP Relay Anomalies" icon={Network} />
+              <div className="space-y-1.5">
+                {result.smtpAnomalies.map((a, i) => (
+                  <div
+                    key={i}
+                    className={`p-3 rounded-xl border text-[11px] ${
+                      a.severity === "HIGH"
+                        ? "bg-red-950/30 border-red-700/40 text-red-200"
+                        : a.severity === "MEDIUM"
+                        ? "bg-amber-950/30 border-amber-700/40 text-amber-200"
+                        : "bg-slate-900/60 border-slate-800 text-slate-300"
+                    }`}
+                  >
+                    <span className="font-mono uppercase text-[9px] opacity-70">
+                      {a.type.replace(/_/g, " ")}
+                    </span>
+                    <div>{a.description}</div>
+                  </div>
+                ))}
+              </div>
+            </div>
+          )}
+
+          {/* ---- Attachment Structure Analysis ---- */}
+          {result.attachments && result.attachments.length > 0 && (
+            <div className="p-5 rounded-2xl bg-slate-900/60 border border-slate-800 space-y-4">
+              <SectionHeader title="Attachment Structure Analysis" icon={FileText} />
+              <div className="space-y-1.5">
+                {result.attachments.map((a, i) => (
+                  <div
+                    key={i}
+                    className={`p-3 rounded-xl border text-[11px] ${
+                      a.suspicious
+                        ? "bg-red-950/30 border-red-700/40"
+                        : "bg-slate-900/60 border-slate-800"
+                    }`}
+                  >
+                    <div className="flex items-center gap-2 flex-wrap">
+                      <span className="font-mono text-slate-200">{a.filename}</span>
+                      <span className="text-slate-500">({a.extension || "no ext"})</span>
+                      {a.suspicious && (
+                        <span className="px-1.5 py-0.5 rounded bg-red-900/60 text-red-300 text-[9px] font-bold">
+                          SUSPICIOUS
+                        </span>
+                      )}
+                      <span className="ml-auto flex gap-2 text-[9px] font-mono text-slate-500">
+                        {a.executable && <span className="text-red-400">EXE</span>}
+                        {a.scriptLike && <span className="text-red-400">SCRIPT</span>}
+                        {a.macroHint && <span className="text-amber-300">MACRO?</span>}
+                        {a.doubleExtension && <span className="text-amber-300">DBL-EXT</span>}
+                        {a.archive && <span className="text-slate-400">ARCHIVE</span>}
+                      </span>
+                    </div>
+                    <div className="text-slate-500">
+                      Structural analysis only — attachment content is never executed or decoded.
+                    </div>
+                  </div>
+                ))}
+              </div>
+            </div>
+          )}
+
+          {/* ---- Signal Extraction (Entities) ---- */}
+          {result.entities && result.entities.length > 0 && (
+            <div className="p-5 rounded-2xl bg-slate-900/60 border border-slate-800 space-y-4">
+              <SectionHeader title="Signal Extraction" icon={Link2} />
+              <div className="flex flex-wrap gap-1.5">
+                {result.entities.map((e, i) => (
+                  <span
+                    key={i}
+                    className="inline-flex items-center gap-1 px-2 py-1 rounded-lg bg-slate-950 border border-slate-700 text-[10px] font-mono text-slate-200"
+                  >
+                    <span className="uppercase text-[8px] text-emergency-400">{e.type}</span>
+                    {e.value}
+                  </span>
+                ))}
+              </div>
+              <div className="text-[10px] text-slate-500">
+                Pattern-based extraction. It flags content types referenced in the email; it does not
+                confirm any organization or number actually sent this email.
+              </div>
+            </div>
+          )}
 
                     {/* ---- Threat / Indicator Correlation ---- */}
           {result.indicatorCorrelations && result.indicatorCorrelations.length > 0 && (
@@ -1147,7 +1367,7 @@ ${result.indicators.map(i => `• ${i.type}: ${i.value}${i.malicious ? " (SUSPIC
               <div className="mt-3 space-y-2">
                 {result.recommendations.map((rec, i) => (
                   <div key={i} className="text-xs text-slate-300 flex items-start gap-2">
-                    <ArrowRight className="w-3.5 h-3.5 text-purple-400 shrink-0 mt-0.5" />
+                    <ArrowRight className="w-3.5 h-3.5 text-emergency-400 shrink-0 mt-0.5" />
                     <span className="break-words">{rec}</span>
                   </div>
                 ))}

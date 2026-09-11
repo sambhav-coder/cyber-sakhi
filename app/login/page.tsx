@@ -44,33 +44,21 @@ function LoginForm() {
 
     try {
       const res = await signIn("credentials", {
-        email: identifier.trim(),
+        identifier: identifier.trim(),
         password,
         redirect: false,
         callbackUrl,
       });
 
       if (res?.error) {
-        setErrorMessage("Invalid Sakhi Number / Email or password. Please try again.");
+        setErrorMessage("Invalid credentials.");
       } else if (res?.ok) {
         router.push(callbackUrl);
         router.refresh();
       }
     } catch (err) {
-      setErrorMessage("An unexpected authentication error occurred. Please try again.");
+      setErrorMessage("Invalid credentials.");
     } finally {
-      setIsLoading(false);
-    }
-  };
-
-  const handleGoogleLogin = async () => {
-    setIsLoading(true);
-    setErrorMessage(null);
-    setSuccessBanner(null);
-    try {
-      await signIn("google", { callbackUrl });
-    } catch (err) {
-      setErrorMessage("Could not initialize Google authentication.");
       setIsLoading(false);
     }
   };
@@ -170,48 +158,13 @@ function LoginForm() {
             </div>
           )}
 
-          {/* Google OAuth Button */}
-          <button
-            type="button"
-            onClick={handleGoogleLogin}
-            disabled={isLoading}
-            className="w-full py-3 px-4 rounded-xl bg-slate-900/90 hover:bg-slate-800 border border-slate-700/80 hover:border-emergency-500/40 text-slate-100 text-xs font-semibold transition flex items-center justify-center gap-3 group"
-          >
-            <svg className="w-4 h-4" viewBox="0 0 24 24">
-              <path
-                fill="#EA4335"
-                d="M12 5c1.6 0 3 .6 4.1 1.7l3.1-3.1C17.3 1.8 14.8 1 12 1 7.5 1 3.7 3.6 1.9 7.3l3.7 2.9C6.5 7.3 9 5 12 5z"
-              />
-              <path
-                fill="#4285F4"
-                d="M23.5 12.3c0-.8-.1-1.6-.2-2.3H12v4.6h6.5c-.3 1.5-1.1 2.8-2.4 3.7l3.7 2.9c2.2-2 3.7-5 3.7-8.9z"
-              />
-              <path
-                fill="#FBBC05"
-                d="M5.6 14.8c-.2-.7-.4-1.5-.4-2.3s.2-1.6.4-2.3L1.9 7.3C.7 9.7 0 12.3 0 15.1c0 2.8.7 5.4 1.9 7.8l3.7-2.9z"
-              />
-              <path
-                fill="#34A853"
-                d="M12 23.5c3.2 0 6-1.1 8-3l-3.7-2.9c-1.1.7-2.5 1.2-4.3 1.2-3 0-5.5-2.3-6.4-5.2L1.9 16.5C3.7 20.2 7.5 23.5 12 23.5z"
-              />
-            </svg>
-            <span>Continue with Google</span>
-          </button>
-
-          {/* Divider */}
-          <div className="flex items-center gap-3 text-xs text-slate-500">
-            <div className="flex-1 h-px bg-gradient-to-r from-transparent via-slate-700 to-transparent" />
-            <span>or sign in with your Sakhi Number</span>
-            <div className="flex-1 h-px bg-gradient-to-r from-transparent via-slate-700 to-transparent" />
-          </div>
-
           {/* Credentials Form */}
           <form onSubmit={handleCredentialsLogin} className="space-y-4 text-xs">
             {/* Identifier */}
             <div className="space-y-1.5">
               <label className="font-bold text-slate-200 tracking-wide flex items-center gap-1.5">
                 <KeyRound className="w-3.5 h-3.5 text-emergency-400" />
-                Sakhi Number <span className="text-slate-500">/</span> Email Address
+                Sakhi Number
               </label>
               <div className="relative">
                 <Fingerprint className="w-4 h-4 absolute left-3.5 top-3.5 text-slate-500" />
@@ -220,12 +173,12 @@ function LoginForm() {
                   required
                   value={identifier}
                   onChange={(e) => setIdentifier(e.target.value)}
-                  placeholder="SAKHI-2026-XXXXX or you@example.com"
+                  placeholder="SAKHI-2026-XXXXX"
                   className="w-full rounded-xl bg-black/50 border border-slate-700/80 pl-11 pr-3.5 py-3 text-sm text-white placeholder:text-slate-500 focus:outline-none focus:border-emergency-500 focus:ring-2 focus:ring-emergency-500/25 transition"
                 />
               </div>
               <p className="text-[10px] text-slate-500 pl-0.5 tracking-wide">
-                🔒 You'll use your Sakhi Number every time you sign in to Cyber Sakhi
+                🔒 Use the Sakhi Number you received at signup — e.g. SAKHI-2026-AB12X
               </p>
             </div>
 
@@ -236,7 +189,7 @@ function LoginForm() {
                 Password
               </label>
               <div className="relative">
-                <Mail className="w-4 h-4 absolute left-3.5 top-3.5 text-slate-500 opacity-50" />
+                <KeyRound className="w-4 h-4 absolute left-3.5 top-3.5 text-slate-500 opacity-50" />
                 <input
                   type="password"
                   required
@@ -275,6 +228,16 @@ function LoginForm() {
               )}
             </button>
           </form>
+
+          {/* Forgot credentials link */}
+          <div className="text-center -mt-1">
+            <Link
+              href="/recover"
+              className="text-[11px] text-slate-400 hover:text-emergency-300 transition-colors tracking-wide underline decoration-emergency-500/30 underline-offset-4"
+            >
+              Forgot your Sakhi Number &amp; Password?
+            </Link>
+          </div>
 
           {/* Confidentiality Note */}
           <div
@@ -323,6 +286,9 @@ function LoginForm() {
                 )}
                 <span className="tracking-wide">{sakhiCopied ? "Copied" : "SAKHI-2026-XXXXX"}</span>
               </button>
+            </div>
+            <div className="text-[10px] text-slate-500 leading-snug">
+              <span className="text-slate-400">Backward-compat note:</span> Pre-registered demo accounts still accept their original email identifiers. Newly created accounts <span className="text-emergency-300 font-semibold">must</span> use their Sakhi Number.
             </div>
             <div className="grid grid-cols-1 sm:grid-cols-2 gap-2">
               <button

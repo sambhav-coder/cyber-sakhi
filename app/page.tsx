@@ -757,11 +757,6 @@ export default function HomePage() {
                       Safety Dashboard
                     </Link>
                   </li>
-                  <li>
-                    <Link href="/developer" className="hover:text-emergency-300 transition-colors">
-                      SDK / API Documentation
-                    </Link>
-                  </li>
                 </ul>
               </div>
               <div>
@@ -777,16 +772,6 @@ export default function HomePage() {
                   <li>
                     <Link href="/companion" className="hover:text-emergency-300 transition-colors">
                       Talk to Sakhi AI
-                    </Link>
-                  </li>
-                  <li>
-                    <Link href="/detector" className="hover:text-emergency-300 transition-colors">
-                      Threat &amp; Phishing Detector
-                    </Link>
-                  </li>
-                  <li>
-                    <Link href="/sos" className="hover:text-emergency-300 transition-colors">
-                      VoiceShield SOS Beacon
                     </Link>
                   </li>
                 </ul>

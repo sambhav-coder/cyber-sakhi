@@ -149,3 +149,27 @@
 .delay-800  { animation-delay: 800ms;  }
 .delay-900  { animation-delay: 900ms;  }
 .delay-1000 { animation-delay: 1000ms; }
+
+/* Rising embers behind the Sakhi presence */
+.sakhi-ember {
+  position: absolute;
+  border-radius: 9999px;
+  background: radial-gradient(circle, rgba(252, 165, 165, 0.95) 0%, rgba(239, 68, 68, 0.55) 45%, rgba(239, 68, 68, 0) 75%);
+  box-shadow: 0 0 8px 1px rgba(239, 68, 68, 0.55);
+  animation: sakhiEmberRise linear infinite;
+}
+@keyframes sakhiEmberRise {
+  0%    { transform: translateY(0) translateX(0) scale(0.7); opacity: 0; }
+  12%   { opacity: 1; }
+  60%   { opacity: 0.75; }
+  100%  { transform: translateY(-150px) translateX(14px) scale(1.15); opacity: 0; }
+}
+
+/* Sakhi voice waveform bars */
+.sakhi-wave {
+  animation: sakhiWave 1.1s ease-in-out infinite;
+}
+@keyframes sakhiWave {
+  0%, 100% { transform: scaleY(0.45); opacity: 0.6; }
+  50%      { transform: scaleY(1); opacity: 1; }
+}

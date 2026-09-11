@@ -16,6 +16,23 @@ export async function listChainOfCustody(
   return (data || []) as ChainOfCustodyRow[];
 }
 
+export async function countCustodyByEvidence(
+  evidenceIds: string[]
+): Promise<Record<string, number>> {
+  if (evidenceIds.length === 0) return {};
+  const { data, error } = await getSupabaseServer()
+    .from("chain_of_custody")
+    .select("evidence_id")
+    .in("evidence_id", evidenceIds);
+
+  throwIfError(error, "Failed to count chain of custody events.");
+  const counts: Record<string, number> = {};
+  for (const row of (data || []) as Array<{ evidence_id: string }>) {
+    counts[row.evidence_id] = (counts[row.evidence_id] || 0) + 1;
+  }
+  return counts;
+}
+
 async function computeEventHash(
   evidenceId: string,
   action: string,
@@ -65,18 +82,22 @@ export async function appendChainOfCustody(input: {
     timestamp
   );
 
+  const baseInsert: Record<string, unknown> = {
+    evidence_id: input.evidenceId,
+    action: input.action,
+    actor_id: input.actorId ?? null,
+    notes: input.notes ?? null,
+    created_at: timestamp,
+  };
+
   try {
     const { data, error } = await getSupabaseServer()
       .from("chain_of_custody")
       .insert({
-        evidence_id: input.evidenceId,
-        action: input.action,
-        actor_id: input.actorId ?? null,
-        notes: input.notes ?? null,
+        ...baseInsert,
         previous_hash: previousHash,
         event_hash: eventHash,
         hash: eventHash,
-        created_at: timestamp,
       })
       .select("*")
       .maybeSingle();
@@ -91,31 +112,91 @@ export async function appendChainOfCustody(input: {
 
     return data as ChainOfCustodyRow;
   } catch (err: any) {
+    const message = String(err?.message || "");
     const isMissingColumn =
-      err?.message?.includes("previous_hash") ||
-      err?.message?.includes("event_hash") ||
+      message.includes("previous_hash") ||
+      message.includes("event_hash") ||
       err?.code === "42703";
+    const isMissingHashColumn =
+      message.includes("'hash' column") || message.includes("hash\" column");
 
-    if (isMissingColumn) {
-      const { data, error } = await getSupabaseServer()
-        .from("chain_of_custody")
-        .insert({
-          evidence_id: input.evidenceId,
-          action: input.action,
-          actor_id: input.actorId ?? null,
-          notes: input.notes ?? null,
-          hash: eventHash,
-          created_at: timestamp,
-        })
-        .select("*")
-        .maybeSingle();
+    if (isMissingColumn || isMissingHashColumn) {
+      // Schema variations exist: some deployments have the legacy `hash`
+      // column, newer ones only event_hash/previous_hash. Retry with the
+      // event-based columns (dropping the legacy `hash`) first, then the
+      // legacy-only shape, then a minimal row as a last resort.
+      const attempts: Array<Record<string, unknown>> = isMissingColumn
+        ? [
+            { ...baseInsert, hash: eventHash },
+            { ...baseInsert, previous_hash: previousHash, event_hash: eventHash },
+            baseInsert,
+          ]
+        : [
+            { ...baseInsert, previous_hash: previousHash, event_hash: eventHash },
+            { ...baseInsert, hash: eventHash },
+            baseInsert,
+          ];
 
-      throwIfError(error, "Failed to append chain of custody.");
-      if (!data) throw new DatabaseError("No row returned after legacy insert");
-      return data as ChainOfCustodyRow;
+      for (const attempt of attempts) {
+        const { data, error } = await getSupabaseServer()
+          .from("chain_of_custody")
+          .insert(attempt)
+          .select("*")
+          .maybeSingle();
+        if (!error && data) {
+          return data as ChainOfCustodyRow;
+        }
+      }
+
+      throw new DatabaseError(
+        message || "Failed to append chain of custody.",
+        err?.code
+      );
     }
 
     throw err;
+  }
+}
+
+/**
+ * Compute a deterministic Merkle-style root over the event hashes of
+ * a custody chain. Used for blockchain anchoring: the root uniquely
+ * represents the full custody history of an evidence item.
+ *
+ * Returns a hex-encoded SHA-256 digest.
+ */
+export function computeCustodyRoot(
+  events: Array<{ event_hash?: string | null; hash?: string | null }>
+): string {
+  const leafHashes = events
+    .map((e) => e.event_hash || e.hash)
+    .filter((h): h is string => typeof h === "string" && h.length > 0);
+
+  if (leafHashes.length === 0) {
+    return computeSha256Sync("EMPTY_CUSTODY_CHAIN");
+  }
+
+  // Binary Merkle root
+  let level = leafHashes;
+  while (level.length > 1) {
+    const next: string[] = [];
+    for (let i = 0; i < level.length; i += 2) {
+      const left = level[i];
+      const right = i + 1 < level.length ? level[i + 1] : left;
+      next.push(computeSha256Sync(left + right));
+    }
+    level = next;
+  }
+  return level[0];
+}
+
+function computeSha256Sync(data: string): string {
+  try {
+    const crypto = require("crypto");
+    return crypto.createHash("sha256").update(data).digest("hex");
+  } catch {
+    // Fallback: should not happen in Node runtime
+    return data;
   }
 }
 
@@ -138,6 +219,20 @@ async function verifyHash(data: string, expectedHash: string): Promise<boolean> 
   return calculatedHash === expectedHash;
 }
 
+/**
+ * Normalize the DB-returned timestamp to the canonical append format
+ * (e.g. "2026-09-10T08:00:00.000Z"). PostgREST can serialize timestamptz
+ * with an offset such as "+00:00", which would break hash recomputation.
+ */
+function normalizeTimestamp(value: string | Date | null | undefined): string {
+  const raw = value == null ? "" : String(value);
+  const parsed = new Date(raw);
+  if (Number.isNaN(parsed.getTime())) {
+    return raw;
+  }
+  return parsed.toISOString();
+}
+
 export async function verifyChainOfCustody(
   evidenceId: string
 ): Promise<ChainVerificationResult> {
@@ -156,8 +251,8 @@ export async function verifyChainOfCustody(
     };
   }
 
-  const hasNewSchema = events.some(e => e.event_hash !== null && e.event_hash !== '');
-  const hasLegacySchema = events.some(e => e.hash !== null && e.hash !== '');
+  const hasNewSchema = events.some(e => typeof e.event_hash === "string" && e.event_hash !== '');
+  const hasLegacySchema = events.some(e => typeof e.hash === "string" && e.hash !== '');
 
   if (hasNewSchema && hasLegacySchema) {
     schemaVersion = "mixed";
@@ -173,12 +268,12 @@ export async function verifyChainOfCustody(
       continue;
     }
 
-    const hasNewFields = (event.previous_hash !== null && event.previous_hash !== '') ||
-                         (event.event_hash !== null && event.event_hash !== '');
+    const hasNewFields = (typeof event.previous_hash === "string" && event.previous_hash !== '') ||
+                         (typeof event.event_hash === "string" && event.event_hash !== '');
 
     if (hasNewFields) {
       if (i === 0) {
-        if (event.previous_hash !== null) {
+        if (typeof event.previous_hash === "string" && event.previous_hash !== '') {
           errors.push(`Event ${i}: First event should have previous_hash=null`);
         }
       } else {
@@ -190,7 +285,7 @@ export async function verifyChainOfCustody(
       }
     }
 
-    if (event.event_hash !== null && event.event_hash !== '') {
+    if (typeof event.event_hash === "string" && event.event_hash !== '') {
       const isLegacyMd5 =
         typeof event.event_hash === "string" &&
         /^[a-f0-9]{32}$/i.test(event.event_hash);
@@ -206,7 +301,7 @@ export async function verifyChainOfCustody(
         actor_id: event.actor_id,
         notes: event.notes,
         previous_hash: event.previous_hash,
-        timestamp: event.created_at,
+        timestamp: normalizeTimestamp(event.created_at),
       });
 
       const hashOk = await verifyHash(canonicalString, event.event_hash);

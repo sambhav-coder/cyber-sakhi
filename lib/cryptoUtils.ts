@@ -207,16 +207,6 @@ export async function computeSha256(data: ArrayBuffer | string): Promise<string>
   return "hash_" + Math.abs(hash).toString(16).padStart(64, "e");
 }
 
-export function generateMockIpfsCid(hash: string): string {
-  const clean = hash.replace(/[^a-f0-9]/gi, "").substring(0, 32);
-  return `bafybeic${clean}k4q2l7m6`;
-}
-
-export function generateMockTxHash(hash: string): string {
-  const clean = hash.replace(/[^a-f0-9]/gi, "").padEnd(64, "0").substring(0, 64);
-  return `0x${clean}`;
-}
-
 export function formatBytes(bytes: number, decimals = 2): string {
   if (bytes === 0) return "0 Bytes";
   const k = 1024;

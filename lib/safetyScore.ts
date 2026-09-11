@@ -136,7 +136,6 @@ export function computeSafetyScore(input: SafetyInputs): SafetyScoreResult {
         : dualChannel.length === 0
         ? "Enable both channels for one contact"
         : undefined,
-    href: "/contacts",
   });
 
   /* 2. Evidence integrity — 20 */
@@ -185,7 +184,6 @@ export function computeSafetyScore(input: SafetyInputs): SafetyScoreResult {
           } in the last 14 days.`,
     action:
       crit + high > 0 ? "Vault the severe messages and escalate to 1930" : undefined,
-    href: "/detector",
   });
 
   /* 4. Active vigilance — 15 */
@@ -208,7 +206,6 @@ export function computeSafetyScore(input: SafetyInputs): SafetyScoreResult {
             scans.length
           } on record.`,
     action: last7 < 3 ? "Screen suspicious messages as they arrive" : undefined,
-    href: "/detector",
   });
 
   /* 5. Incident response — 10 */
@@ -243,7 +240,6 @@ export function computeSafetyScore(input: SafetyInputs): SafetyScoreResult {
         : sosEvents.length === 0
         ? "Run a cancel drill on the SOS page"
         : undefined,
-    href: "/sos",
   });
 
   const score = pillars.reduce((sum, p) => sum + p.earned, 0);
@@ -396,7 +392,7 @@ export interface ActivityEntry {
   subtitle: string;
   timestamp: string;
   severity?: ThreatSeverity;
-  href: string;
+  href?: string;
 }
 
 /** One chronological stream across all three record types, newest first. */
@@ -418,7 +414,6 @@ export function buildActivityFeed(
       }`,
       timestamp: scan.timestamp,
       severity: scan.threatLevel,
-      href: "/detector",
     });
   }
 
@@ -451,7 +446,6 @@ export function buildActivityFeed(
         sos.location.address
       }`,
       timestamp: sos.timestamp,
-      href: "/sos",
     });
   }
 
@@ -470,7 +464,7 @@ export interface ReadinessItem {
   label: string;
   done: boolean;
   detail: string;
-  href: string;
+  href?: string;
 }
 
 export function computeReadiness(input: SafetyInputs): ReadinessItem[] {
@@ -488,21 +482,18 @@ export function computeReadiness(input: SafetyInputs): ReadinessItem[] {
       label: "Three Verified Emergency Contacts",
       done: verified.length >= 3,
       detail: `${verified.length} of 3 verified`,
-      href: "/contacts",
     },
     {
       id: "primary",
       label: "Primary SOS Recipient Designated",
       done: Boolean(primary),
       detail: primary ? primary.name : "None designated",
-      href: "/contacts",
     },
     {
       id: "channels",
       label: "Dual-Channel Dispatch (WhatsApp + SMS)",
       done: dualChannel.length > 0,
       detail: `${dualChannel.length} contact(s) on both channels`,
-      href: "/contacts",
     },
     {
       id: "vault",
@@ -522,21 +513,18 @@ export function computeReadiness(input: SafetyInputs): ReadinessItem[] {
         sosEvents.length === 0
           ? "Never drilled"
           : `Last: ${relativeTime(sosEvents[0].timestamp)}`,
-      href: "/sos",
     },
     {
       id: "open",
       label: "No Emergency Beacon Left Open",
       done: openSos.length === 0,
       detail: openSos.length === 0 ? "All beacons closed" : `${openSos.length} open`,
-      href: "/sos",
     },
     {
       id: "screening",
       label: "Message Screening Used This Week",
       done: scans7.length > 0,
       detail: `${scans7.length} scan(s) in 7 days`,
-      href: "/detector",
     },
   ];
 }

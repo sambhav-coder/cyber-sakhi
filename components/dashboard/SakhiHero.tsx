@@ -31,14 +31,22 @@ import {
 
 export const SakhiHero: React.FC = () => {
   const { data: session } = useSession();
-  const [sakhiVisible, setSakhiVisible] = useState(true);
+  // Masked by default so the full Sakhi Number is never shown unnecessarily.
+  // The eye toggle can reveal the full value to the account owner, and the
+  // copy button always copies the full value.
+  const [sakhiVisible, setSakhiVisible] = useState(false);
   const [sakhiCopied, setSakhiCopied] = useState(false);
 
   const userName = session?.user?.name || "Sakhi User";
-  const sakhiNumber = session?.user?.sakhiNumber || "SAKHI-2026-LOADING";
+  const fullSakhiNumber = session?.user?.sakhiNumber || "SAKHI-2026-LOADING";
+  const maskedSakhiNumber = fullSakhiNumber.replace(
+    /([A-Z0-9]{2})[A-Z0-9]{3}$/,
+    "$1XXX"
+  );
+  const sakhiNumber = sakhiVisible ? fullSakhiNumber : maskedSakhiNumber;
   const isAdmin = session?.user?.role === "ADMIN";
 
-  // "SAKHI-2026-DEV02" -> prefix "SAKHI-2026-", code "DEV02"
+  // "SAKHI-2026-ABXXX" -> prefix "SAKHI-2026-", code "ABXXX"
   const segments = sakhiNumber.split("-");
   const hasPrefix = segments.length >= 3;
   const idPrefix = hasPrefix ? `${segments.slice(0, -1).join("-")}-` : "";
@@ -58,7 +66,7 @@ export const SakhiHero: React.FC = () => {
 
   const onCopySakhi = async () => {
     try {
-      await navigator.clipboard.writeText(sakhiNumber);
+      await navigator.clipboard.writeText(fullSakhiNumber);
       setSakhiCopied(true);
       setTimeout(() => setSakhiCopied(false), 1800);
     } catch {
@@ -200,7 +208,7 @@ export const SakhiHero: React.FC = () => {
                   className="text-2xl sm:text-3xl font-black text-white tracking-[0.08em] tabular-nums"
                   style={{ textShadow: "0 0 24px rgba(248, 113, 113, 0.45)" }}
                 >
-                  {sakhiVisible ? idCode : "•".repeat(idCode.length)}
+                  {idCode}
                 </span>
               </div>
 

@@ -1,11 +1,10 @@
 "use client";
 
-import React, { useState, Suspense } from "react";
+import React, { useState, Suspense, useEffect, useRef } from "react";
 import Link from "next/link";
 import { useRouter, useSearchParams } from "next/navigation";
-import { signIn } from "next-auth/react";
+import { signIn, signOut, getSession } from "next-auth/react";
 import {
-  Lock,
   Mail,
   User,
   ArrowRight,
@@ -20,11 +19,12 @@ import {
   Check,
   Eye,
   EyeOff,
+  KeyRound,
+  Lock,
+  UserCheck,
+  LayoutDashboard,
+  LogOut,
 } from "lucide-react";
-import {
-  saveStoredProfileDraft,
-  ExtendedProfileDraft,
-} from "@/lib/storage";
 
 interface SignupSuccessData {
   sakhiNumber: string;
@@ -38,36 +38,276 @@ function SignupForm() {
   const searchParams = useSearchParams();
   const callbackUrl = searchParams.get("callbackUrl") || "/dashboard";
 
-  // Core fields
   const [name, setName] = useState("");
   const [email, setEmail] = useState("");
-  const [password, setPassword] = useState("");
-  const [confirmPassword, setConfirmPassword] = useState("");
-  // Extended profile (UI collection, client-side stored)
   const [age, setAge] = useState("");
   const [city, setCity] = useState("");
   const [phone, setPhone] = useState("");
+
+  // Google-signup completion step: after OAuth (no age from Google) we ask
+  // for the mandatory age field only. Name/email come from the Google session.
+  const [googleProfile, setGoogleProfile] = useState<{
+    name: string;
+    email: string;
+  } | null>(null);
+  const [googleAge, setGoogleAge] = useState("");
+  const [googleCity, setGoogleCity] = useState("");
+  const [googlePhone, setGooglePhone] = useState("");
 
   const [isLoading, setIsLoading] = useState(false);
   const [errorMessage, setErrorMessage] = useState<string | null>(null);
   const [success, setSuccess] = useState<SignupSuccessData | null>(null);
   const [sakhiCopied, setSakhiCopied] = useState(false);
+  const [pwCopied, setPwCopied] = useState(false);
+  const [googleSignupInFlight, setGoogleSignupInFlight] = useState(false);
   const [redirecting, setRedirecting] = useState(false);
-  const [showPw, setShowPw] = useState(false);
+  const [showGeneratedPw, setShowGeneratedPw] = useState(false);
 
-  const passwordStrong = password.length >= 8 && /[A-Z]/.test(password) && /[0-9]/.test(password);
+  // Latch that persists across StrictMode remounts so the Google-signup
+  // discovery request is fired at most once per page session.
+  const googleSignupStarted = useRef(false);
 
-  const handleSignup = async (e: React.FormEvent) => {
+  // Security guard: opening /signup while already authenticated must NOT
+  // let the user start a Google flow or create a second profile. We only
+  // keep the form usable for the Google-return continuation (?google=true)
+  // and the post-signup credential popup.
+  const [authCheckDone, setAuthCheckDone] = useState(false);
+  const [alreadyLoggedIn, setAlreadyLoggedIn] = useState(false);
+
+  useEffect(() => {
+    let cancelled = false;
+    (async () => {
+      try {
+        const session = await getSession();
+        if (!cancelled && session?.user?.id) {
+          setAlreadyLoggedIn(true);
+        }
+      } catch {
+        /* session check is best-effort */
+      } finally {
+        if (!cancelled) setAuthCheckDone(true);
+      }
+    })();
+    return () => {
+      cancelled = true;
+    };
+  }, []);
+
+  // Deterministic logout: call NextAuth's server-side sign-out (the supported
+  // mechanism) and then VERIFY the session is actually gone before navigating.
+  // The old arbitrary 300ms timer was unreliable — if the sign-out POST was slow
+  // on a misbehaving runtime, navigation happened first and the stale session
+  // cookie brought the user right back to an "already logged in" state.
+  const clearAuthCookies = () => {
+    for (const name of ["next-auth.session-token", "__Secure-next-auth.session-token"]) {
+      document.cookie = `${name}=; Max-Age=0; Path=/; SameSite=Lax`;
+    }
+  };
+
+  const handleLogoutToSignup = async () => {
+    setIsLoading(true);
+    try {
+      // Primary path — NextAuth's own sign-out (clears the JWT session cookie).
+      await signOut({ redirect: false });
+    } catch {
+      /* fall through to defensive clean-up below */
+    }
+
+    // Verify the session was truly destroyed. If the server round-trip failed
+    // (e.g. a corrupted/racing runtime), force the cookie out so no stale
+    // session survives the navigation.
+    try {
+      const res = await fetch("/api/auth/session");
+      const session = await res.json();
+      if (session?.user?.email) {
+        clearAuthCookies();
+      }
+    } catch {
+      clearAuthCookies();
+    }
+
+    setIsLoading(false);
+    router.push("/signup");
+    router.refresh();
+  };
+
+  useEffect(() => {
+    const token = searchParams.get("onetime");
+    if (token && !success) {
+      (async () => {
+        try {
+          const res = await fetch(`/api/auth/onetime?token=${encodeURIComponent(token)}`);
+          if (res.ok) {
+            const data = await res.json();
+            if (data && data.sakhiNumber && data.generatedPassword) {
+              setSuccess({
+                sakhiNumber: data.sakhiNumber,
+                name: data.name || "Sakhi User",
+                email: data.email || "",
+                password: data.generatedPassword,
+              });
+            }
+          }
+        } catch {
+          /* silently ignore */
+        }
+      })();
+    }
+  }, [searchParams, success]);
+
+  useEffect(() => {
+    let cancelled = false;
+    (async () => {
+      try {
+        // Run at most once per page session, and only when ?google=true.
+        // Cancelling/StrictMode remounts must not fire a duplicate request.
+        if (
+          cancelled ||
+          googleSignupStarted.current ||
+          searchParams.get("google") !== "true" ||
+          success ||
+          googleProfile
+        )
+          return;
+        googleSignupStarted.current = true;
+
+        setGoogleSignupInFlight(true);
+        const res = await fetch("/api/auth/google-signup", { method: "POST" });
+        const data = await res.json();
+        const ok = res.ok;
+
+        // The discovery response (`needsAge`) is a SUCCESS — it must not be
+        // treated as a failure just because it carries no one-time token.
+        // The server has already destroyed the OAuth session on any non-2xx,
+        // but we sign out client-side too so retry starts unauthenticated.
+        if (!ok) {
+          try {
+            await signOut({ callbackUrl: "/login", redirect: false });
+          } catch {
+            /* best-effort */
+          }
+          setErrorMessage(
+            data?.error || "Google signup failed. Please try again."
+          );
+          setGoogleSignupInFlight(false);
+          return;
+        }
+
+        if (data.needsAge && !success) {
+          // Name/email come from the Google session — only age is missing.
+          setGoogleProfile({ name: data.name || "", email: data.email || "" });
+        } else if (data.token && !success) {
+          // Redirect to signup with onetime token
+          window.location.href = `/signup?onetime=${encodeURIComponent(data.token)}`;
+        } else if (data.redirectTo) {
+          // User already exists, redirect to dashboard
+          window.location.href = data.redirectTo;
+        } else {
+          // 2xx but no actionable payload — treat as failure and clean up.
+          try {
+            await signOut({ callbackUrl: "/login", redirect: false });
+          } catch {
+            /* best-effort */
+          }
+          setErrorMessage("Google signup failed. Please try again.");
+        }
+      } catch (err) {
+        // Network-level error – clean up session so retry is safe.
+        try {
+          await signOut({ callbackUrl: "/login", redirect: false });
+        } catch {
+          /* best-effort */
+        }
+        setErrorMessage(
+          "An unexpected network error occurred. Please try again."
+        );
+        setGoogleSignupInFlight(false);
+      } finally {
+        setGoogleSignupInFlight(false);
+      }
+    })();
+    return () => {
+      cancelled = true;
+    };
+  }, [searchParams, success, googleProfile]);
+
+// Age step "Finish" — completes the Google signup and shows the same
+  // credentials popup used by manual signup.
+  const handleGoogleFinish = async (e: React.FormEvent) => {
     e.preventDefault();
-    if (!name.trim() || !email.trim() || !password) return;
-
-    if (password.length < 6) {
-      setErrorMessage("Password must be at least 6 characters long.");
+    const ageNum = Number(googleAge);
+    if (!googleAge || Number.isNaN(ageNum) || ageNum < 10 || ageNum > 120) {
+      setErrorMessage("Age must be a valid number between 10 and 120.");
+      return;
+    }
+    if (googlePhone.trim() && googlePhone.replace(/[^\d+]/g, "").length < 8) {
+      setErrorMessage("A valid phone number is required.");
       return;
     }
 
-    if (password !== confirmPassword) {
-      setErrorMessage("Passwords do not match. Please re-check.");
+    setIsLoading(true);
+    setErrorMessage(null);
+
+    try {
+      const res = await fetch("/api/auth/google-signup", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({
+          age: String(ageNum),
+          city: googleCity.trim(),
+          phone: googlePhone.trim(),
+        }),
+      });
+      const data = await res.json();
+
+      if (data?.token) {
+        window.location.href = `/signup?onetime=${encodeURIComponent(data.token)}`;
+        return;
+      }
+      if (data?.redirectTo) {
+        window.location.href = data.redirectTo;
+        return;
+      }
+      // Failure — the server already destroyed the OAuth session on any
+      // non-2xx. Best-effort client clean-up keeps the browser consistent.
+      try {
+        await signOut({ callbackUrl: "/login", redirect: false });
+      } catch {
+        /* best-effort */
+      }
+      setErrorMessage(data?.error || "Failed to complete Google signup.");
+      setIsLoading(false);
+    } catch (err) {
+      setErrorMessage("An unexpected network error occurred. Please try again.");
+      setIsLoading(false);
+    }
+  };
+
+  const handleSignup = async (e: React.FormEvent) => {
+    e.preventDefault();
+
+    if (alreadyLoggedIn) {
+      setErrorMessage(
+        "You are already logged in. Please log out before creating a new account."
+      );
+      return;
+    }
+
+    if (!name.trim()) {
+      setErrorMessage("Name is required.");
+      return;
+    }
+    if (!email.trim() || !email.includes("@")) {
+      setErrorMessage("A valid email address is required.");
+      return;
+    }
+    const ageNum = Number(age);
+    if (!age || Number.isNaN(ageNum) || ageNum < 10 || ageNum > 120) {
+      setErrorMessage("Age must be a valid number between 10 and 120.");
+      return;
+    }
+    if (phone.trim() && phone.replace(/[^\d+]/g, "").length < 8) {
+      setErrorMessage("A valid phone number is required.");
       return;
     }
 
@@ -81,7 +321,9 @@ function SignupForm() {
         body: JSON.stringify({
           name: name.trim(),
           email: email.trim(),
-          password,
+          age: String(ageNum),
+          city: city.trim(),
+          phone: phone.trim(),
         }),
       });
 
@@ -93,23 +335,41 @@ function SignupForm() {
         return;
       }
 
-      // Save extended profile to localStorage (Task 5 requirement — Age/City/Contact)
-      const draft: ExtendedProfileDraft = {};
-      const ageNum = Number(age);
-      if (age && !Number.isNaN(ageNum) && ageNum > 0 && ageNum < 150){
-        draft.age = String(ageNum);
+      // Manual signup returns a one-time token (the password itself is never
+      // sent in the API response). Redeem it to populate the credentials popup.
+      if (data?.token) {
+        try {
+          const credRes = await fetch(
+            `/api/auth/onetime?token=${encodeURIComponent(data.token)}`
+          );
+          const cred = await credRes.json();
+          if (credRes.ok && cred?.sakhiNumber && cred?.generatedPassword) {
+            setSuccess({
+              sakhiNumber: cred.sakhiNumber,
+              name: cred.name || name.trim(),
+              email: cred.email || email.trim(),
+              password: cred.generatedPassword,
+            });
+            setIsLoading(false);
+            return;
+          }
+        } catch {
+          /* fall through to fallback */
+        }
+        router.push(
+          `/login?registered=true&sakhi=${encodeURIComponent(
+            data?.user?.sakhi_number || ""
+          )}`
+        );
+        setIsLoading(false);
+        return;
+      }
 
-      } 
-      if (city.trim()) draft.city = city.trim();
-      if (phone.trim()) draft.phone = phone.trim();
-      if (draft.age || draft.city || draft.phone) saveStoredProfileDraft(draft);
-
-      // Show Sakhi Number success panel BEFORE auto signIn
       setSuccess({
         sakhiNumber: data?.user?.sakhi_number || "SAKHI-2026-UNKNOWN",
         name: data?.user?.name || name.trim(),
         email: data?.user?.email || email.trim(),
-        password,
+        password: data?.generatedPassword || "",
       });
       setIsLoading(false);
     } catch (err) {
@@ -123,7 +383,7 @@ function SignupForm() {
     setRedirecting(true);
     try {
       const loginRes = await signIn("credentials", {
-        email: success.email,
+        identifier: success.sakhiNumber,
         password: success.password,
         redirect: false,
         callbackUrl,
@@ -142,10 +402,16 @@ function SignupForm() {
   };
 
   const handleGoogleLogin = async () => {
+    if (alreadyLoggedIn) {
+      setErrorMessage(
+        "You are already logged in. Please log out before signing up with a different account."
+      );
+      return;
+    }
     setIsLoading(true);
     setErrorMessage(null);
     try {
-      await signIn("google", { callbackUrl });
+      await signIn("google", { callbackUrl: "/signup?google=true" });
     } catch (err) {
       setErrorMessage("Could not initialize Google authentication.");
       setIsLoading(false);
@@ -158,6 +424,17 @@ function SignupForm() {
       await navigator.clipboard.writeText(success.sakhiNumber);
       setSakhiCopied(true);
       setTimeout(() => setSakhiCopied(false), 2200);
+    } catch {
+      /* silent */
+    }
+  };
+
+  const copyGeneratedPassword = async () => {
+    if (!success) return;
+    try {
+      await navigator.clipboard.writeText(success.password);
+      setPwCopied(true);
+      setTimeout(() => setPwCopied(false), 2200);
     } catch {
       /* silent */
     }
@@ -311,6 +588,95 @@ function SignupForm() {
             </div>
           </div>
 
+          {/* GENERATED PASSWORD CARD */}
+          <div
+            className="relative mb-6 p-6 sm:p-8 rounded-3xl overflow-hidden"
+            style={{
+              background:
+                "linear-gradient(135deg, rgba(124, 58, 237, 0.18) 0%, rgba(79, 70, 229, 0.18) 35%, rgba(5, 5, 10, 0.85) 100%)",
+              border: "1px solid rgba(139, 92, 246, 0.35)",
+              boxShadow:
+                "0 30px 80px -40px rgba(124, 58, 237, 0.7), inset 0 1px 0 rgba(221, 214, 254, 0.15)",
+            }}
+          >
+            <div
+              className="absolute inset-0 opacity-10 pointer-events-none"
+              style={{
+                backgroundImage:
+                  "repeating-linear-gradient(-45deg, rgba(196, 181, 253, 0.4) 0 2px, transparent 2px 14px)",
+              }}
+            />
+            <div className="absolute top-3 right-3 flex gap-1 opacity-50 pointer-events-none">
+              <KeyRound className="w-4 h-4 text-violet-400" />
+            </div>
+
+            <div className="relative space-y-4">
+              <div className="flex items-center gap-2">
+                <span className="inline-flex items-center gap-1.5 px-3 py-1 rounded-full text-[10px] font-extrabold tracking-[0.2em] uppercase text-white"
+                  style={{ background: "linear-gradient(135deg, #4c1d95, #7c3aed)" }}
+                >
+                  <Lock className="w-3 h-3" />
+                  Temporary Password
+                </span>
+              </div>
+
+              <div className="flex items-center justify-between gap-3 bg-black/40 border border-violet-500/20 rounded-2xl p-4 sm:p-5 backdrop-blur">
+                <div className="overflow-hidden flex-1">
+                  <div className="text-[10px] tracking-[0.2em] text-slate-500 uppercase font-bold mb-1">
+                    One-time password (save now)
+                  </div>
+                  <div
+                    className="font-mono font-black text-white tracking-[0.1em] text-lg sm:text-xl md:text-2xl whitespace-nowrap overflow-hidden"
+                    style={{ textShadow: "0 0 24px rgba(167, 139, 250, 0.5)" }}
+                  >
+                    {showGeneratedPw ? success.password : "•".repeat(Math.max(success.password.length, 14))}
+                  </div>
+                </div>
+                <div className="flex items-center gap-2 shrink-0">
+                  <button
+                    type="button"
+                    onClick={() => setShowGeneratedPw((s) => !s)}
+                    className="h-12 w-12 rounded-xl bg-violet-500/10 border border-violet-500/30 text-violet-300 hover:bg-violet-500/20 flex items-center justify-center transition-all hover:scale-105"
+                    title={showGeneratedPw ? "Hide password" : "Show password"}
+                    aria-label={showGeneratedPw ? "Hide password" : "Show password"}
+                  >
+                    {showGeneratedPw ? <EyeOff className="w-5 h-5" /> : <Eye className="w-5 h-5" />}
+                  </button>
+                  <button
+                    type="button"
+                    onClick={copyGeneratedPassword}
+                    className={`h-12 w-12 rounded-xl flex items-center justify-center transition-all ${
+                      pwCopied
+                        ? "bg-emerald-500/20 border border-emerald-500/60 text-emerald-300"
+                        : "bg-violet-500/15 border border-violet-500/40 text-violet-300 hover:bg-violet-500/25 hover:scale-105"
+                    }`}
+                    title="Copy Password"
+                    aria-label="Copy Password"
+                  >
+                    {pwCopied ? <Check className="w-5 h-5" /> : <Copy className="w-5 h-5" />}
+                  </button>
+                </div>
+              </div>
+
+              {pwCopied && (
+                <div className="flex items-center gap-1.5 text-[11px] text-emerald-300 font-semibold tracking-wide animate-fade-in-up">
+                  <CheckCircle2 className="w-3.5 h-3.5" />
+                  Password copied to clipboard! Paste it somewhere safe right now.
+                </div>
+              )}
+
+              <div className="p-3 rounded-xl" style={{ background: "rgba(220, 38, 38, 0.15)", border: "1px solid rgba(248, 113, 113, 0.3)" }}>
+                <div className="flex items-start gap-2">
+                  <AlertCircle className="w-4 h-4 text-emergency-400 shrink-0 mt-0.5" />
+                  <div className="text-[11px] text-emergency-300 font-bold leading-relaxed tracking-wide">
+                    This password is shown ONLY NOW — save it, it cannot be recovered.
+                    After you click Continue below you will NOT see it again.
+                  </div>
+                </div>
+              </div>
+            </div>
+          </div>
+
           {/* Continue */}
           <button
             type="button"
@@ -345,6 +711,275 @@ function SignupForm() {
             >
               ← Go to Login page instead
             </Link>
+          </div>
+        </div>
+      </div>
+    );
+  }
+
+  // =========================
+  // GOOGLE AGE COMPLETION STEP
+  // =========================
+  if (googleProfile) {
+    return (
+      <div className="min-h-screen w-full relative flex items-center justify-center px-4 sm:px-6 py-10 overflow-hidden">
+        <div
+          className="absolute inset-0 pointer-events-none"
+          style={{
+            background:
+              "radial-gradient(ellipse 55% 45% at 15% 10%, rgba(220, 38, 38, 0.28), transparent 65%), radial-gradient(ellipse 55% 45% at 85% 90%, rgba(127, 29, 29, 0.35), transparent 65%), linear-gradient(180deg, #05050a 0%, #0a0a18 100%)",
+          }}
+        />
+        <div
+          className="absolute inset-0 opacity-[0.06] mix-blend-overlay pointer-events-none"
+          style={{
+            backgroundImage:
+              "repeating-linear-gradient(0deg, transparent 0 2px, rgba(255,255,255,0.08) 2px 3px)",
+          }}
+        />
+
+        <div className="relative z-10 w-full max-w-md space-y-6 animate-fade-in-up">
+          <div className="flex justify-between items-center -mt-2 mb-1">
+            <Link
+              href="/"
+              className="text-[11px] text-slate-400 hover:text-emergency-300 transition-colors tracking-wide flex items-center gap-1.5"
+            >
+              <ArrowRight className="w-3 h-3 rotate-180" />
+              Back to Home
+            </Link>
+          </div>
+
+          <div className="text-center space-y-3">
+            <h1 className="text-2xl sm:text-3xl font-black tracking-tight">
+              <span className="text-white">Almost there, </span>
+              <span className="text-crimson-gradient">{googleProfile.name.split(" ")[0]}</span>
+            </h1>
+            <p className="text-xs sm:text-sm text-slate-400 leading-relaxed max-w-sm mx-auto">
+              Google brought your name &amp; email. One more detail and your
+              unique <span className="text-emergency-300 font-semibold">Sakhi Number</span> is yours.
+            </p>
+          </div>
+
+          <div
+            className="p-6 sm:p-8 rounded-3xl glass-panel space-y-5"
+            style={{
+              border: "1px solid rgba(239, 68, 68, 0.18)",
+              boxShadow:
+                "0 30px 80px -40px rgba(0,0,0,0.9), 0 0 60px -30px rgba(220, 38, 38, 0.35)",
+            }}
+          >
+            {errorMessage && (
+              <div className="p-3.5 rounded-xl bg-red-950/80 border border-red-500/50 text-red-200 text-xs flex items-center gap-2 animate-fade-in-up">
+                <AlertCircle className="w-4 h-4 text-red-400 shrink-0" />
+                <span>{errorMessage}</span>
+              </div>
+            )}
+
+            {/* Google-provided name/email (read-only, not re-entered) */}
+            <div className="space-y-2">
+              <div className="grid grid-cols-2 gap-2.5">
+                <div className="p-2.5 rounded-xl bg-black/30 border border-white/5">
+                  <div className="text-[9px] tracking-[0.2em] uppercase text-slate-500 mb-1 font-bold">
+                    Name
+                  </div>
+                  <div className="text-xs text-slate-200 font-semibold truncate">
+                    {googleProfile.name}
+                  </div>
+                </div>
+                <div className="p-2.5 rounded-xl bg-black/30 border border-white/5">
+                  <div className="text-[9px] tracking-[0.2em] uppercase text-slate-500 mb-1 font-bold">
+                    Email
+                  </div>
+                  <div className="text-xs text-slate-200 font-semibold truncate">
+                    {googleProfile.email}
+                  </div>
+                </div>
+              </div>
+              <div className="flex items-center gap-1.5 text-[10px] text-emerald-300 font-semibold">
+                <ShieldCheck className="w-3 h-3" />
+                Verified via Google Sign-In
+              </div>
+            </div>
+
+            <form onSubmit={handleGoogleFinish} className="space-y-3.5 text-xs">
+              <div className="space-y-1.5">
+                <label className="font-bold text-slate-200 tracking-wide flex items-center gap-1.5">
+                  <CalendarDays className="w-3.5 h-3.5 text-emergency-400" />
+                  Age
+                </label>
+                <input
+                  type="number"
+                  required
+                  min={10}
+                  max={120}
+                  value={googleAge}
+                  onChange={(e) => setGoogleAge(e.target.value)}
+                  placeholder="22"
+                  className="w-full rounded-xl bg-black/50 border border-slate-700/80 px-3.5 py-3 text-sm text-white placeholder:text-slate-500 focus:outline-none focus:border-emergency-500 focus:ring-2 focus:ring-emergency-500/25 transition"
+                />
+              </div>
+
+              <div className="grid sm:grid-cols-2 gap-3">
+                <div className="space-y-1.5">
+                  <label className="font-bold text-slate-200 tracking-wide flex items-center gap-1.5">
+                    <MapPin className="w-3.5 h-3.5 text-emergency-400" />
+                    City <span className="font-normal text-slate-500">(optional)</span>
+                  </label>
+                  <input
+                    type="text"
+                    value={googleCity}
+                    onChange={(e) => setGoogleCity(e.target.value)}
+                    placeholder="Bengaluru"
+                    className="w-full rounded-xl bg-black/50 border border-slate-700/80 px-3.5 py-3 text-sm text-white placeholder:text-slate-500 focus:outline-none focus:border-emergency-500 focus:ring-2 focus:ring-emergency-500/25 transition"
+                  />
+                </div>
+                <div className="space-y-1.5">
+                  <label className="font-bold text-slate-200 tracking-wide flex items-center gap-1.5">
+                    <Phone className="w-3.5 h-3.5 text-emergency-400" />
+                    Contact <span className="font-normal text-slate-500">(optional)</span>
+                  </label>
+                  <input
+                    type="tel"
+                    value={googlePhone}
+                    onChange={(e) => setGooglePhone(e.target.value)}
+                    placeholder="+91 98XXX XXXXX"
+                    className="w-full rounded-xl bg-black/50 border border-slate-700/80 px-3.5 py-3 text-sm text-white placeholder:text-slate-500 focus:outline-none focus:border-emergency-500 focus:ring-2 focus:ring-emergency-500/25 transition"
+                  />
+                </div>
+              </div>
+
+              <div
+                className="p-3 rounded-xl flex gap-2.5 items-start"
+                style={{
+                  background: "rgba(5, 5, 10, 0.6)",
+                  border: "1px solid rgba(239, 68, 68, 0.12)",
+                }}
+              >
+                <Fingerprint className="w-4 h-4 text-emergency-400 shrink-0 mt-0.5" />
+                <div className="text-[10.5px] text-slate-400 leading-relaxed">
+                  <span className="text-emergency-300 font-bold">Auto-generated password:</span>{" "}
+                  A secure password will be created and shown once after this step. Save it securely.
+                </div>
+              </div>
+
+              <button
+                type="submit"
+                disabled={isLoading || !googleAge}
+                className="w-full py-4 rounded-xl text-white font-bold tracking-wide text-sm transition flex items-center justify-center gap-2 disabled:opacity-50 mt-1"
+                style={{
+                  background:
+                    "linear-gradient(135deg, #b91c1c 0%, #ef4444 50%, #dc2626 100%)",
+                  boxShadow:
+                    "0 18px 45px -12px rgba(220, 38, 38, 0.75), inset 0 1px 0 rgba(255,255,255,0.18)",
+                  clipPath:
+                    "polygon(0 0, 100% 0, 100% calc(100% - 9px), calc(100% - 9px) 100%, 0 100%)",
+                }}
+              >
+                {isLoading ? (
+                  <span className="flex items-center gap-2">
+                    <span className="w-4 h-4 border-2 border-white/40 border-t-white rounded-full animate-spin" />
+                    Creating Your Sakhi Account...
+                  </span>
+                ) : (
+                  <>
+                    <span>Finish Creating My Account</span>
+                    <ArrowRight className="w-4 h-4" />
+                  </>
+                )}
+              </button>
+            </form>
+          </div>
+        </div>
+      </div>
+    );
+  }
+
+  // =========================
+  // ALREADY LOGGED IN PANEL
+  // =========================
+  if (
+    authCheckDone &&
+    alreadyLoggedIn &&
+    searchParams.get("google") !== "true" &&
+    !success &&
+    !googleProfile
+  ) {
+    return (
+      <div className="min-h-screen w-full relative flex items-center justify-center px-4 sm:px-6 py-10 overflow-hidden">
+        <div
+          className="absolute inset-0 pointer-events-none"
+          style={{
+            background:
+              "radial-gradient(ellipse 55% 45% at 15% 10%, rgba(220, 38, 38, 0.28), transparent 65%), radial-gradient(ellipse 55% 45% at 85% 90%, rgba(127, 29, 29, 0.35), transparent 65%), linear-gradient(180deg, #05050a 0%, #0a0a18 100%)",
+          }}
+        />
+        <div
+          className="absolute inset-0 opacity-[0.06] mix-blend-overlay pointer-events-none"
+          style={{
+            backgroundImage:
+              "repeating-linear-gradient(0deg, transparent 0 2px, rgba(255,255,255,0.08) 2px 3px)",
+          }}
+        />
+
+        <div className="relative z-10 w-full max-w-md space-y-6 animate-fade-in-up">
+          <div className="flex justify-between items-center -mt-2 mb-1">
+            <Link
+              href="/"
+              className="text-[11px] text-slate-400 hover:text-emergency-300 transition-colors tracking-wide flex items-center gap-1.5"
+            >
+              <ArrowRight className="w-3 h-3 rotate-180" />
+              Back to Home
+            </Link>
+          </div>
+
+          <div
+            className="p-6 sm:p-8 rounded-3xl glass-panel space-y-5 text-center"
+            style={{
+              border: "1px solid rgba(239, 68, 68, 0.25)",
+              boxShadow:
+                "0 30px 80px -40px rgba(0,0,0,0.9), 0 0 60px -30px rgba(220, 38, 38, 0.5)",
+            }}
+          >
+            <div className="mx-auto w-16 h-16 rounded-2xl flex items-center justify-center"
+              style={{
+                background: "linear-gradient(135deg, #052e2b 0%, #065f46 60%, #047857 100%)",
+              }}
+            >
+              <UserCheck className="w-9 h-9 text-emerald-300" />
+            </div>
+            <h1 className="text-2xl sm:text-2xl font-black tracking-tight text-white">
+              You are already logged in.
+            </h1>
+            <p className="text-xs sm:text-sm text-slate-400 leading-relaxed max-w-sm mx-auto">
+              Signing up with Google while you are signed in would switch to a
+              different account. To keep your current session and safety data
+              safe, we don&apos;t allow that here.
+            </p>
+
+            <div className="space-y-2.5 pt-1">
+              <button
+                type="button"
+                onClick={() => router.push("/dashboard")}
+                className="w-full py-3.5 rounded-xl text-white font-bold tracking-wide text-sm transition flex items-center justify-center gap-2"
+                style={{
+                  background:
+                    "linear-gradient(135deg, #b91c1c 0%, #ef4444 50%, #dc2626 100%)",
+                  boxShadow:
+                    "0 18px 45px -12px rgba(220, 38, 38, 0.75), inset 0 1px 0 rgba(255,255,255,0.18)",
+                }}
+              >
+                <LayoutDashboard className="w-4 h-4" />
+                Go to Dashboard
+              </button>
+              <button
+                type="button"
+                onClick={handleLogoutToSignup}
+                className="w-full py-3.5 rounded-xl bg-slate-900 hover:bg-slate-800 border border-slate-700/80 hover:border-emergency-500/40 text-slate-100 text-sm font-semibold transition flex items-center justify-center gap-2"
+              >
+                <LogOut className="w-4 h-4" />
+                Log out / use another account
+              </button>
+            </div>
           </div>
         </div>
       </div>
@@ -518,13 +1153,14 @@ function SignupForm() {
               <div className="sm:col-span-2 space-y-1.5">
                 <label className="font-bold text-slate-200 tracking-wide flex items-center gap-1.5">
                   <CalendarDays className="w-3.5 h-3.5 text-emergency-400" />
-                  Age <span className="text-slate-500 font-normal">(optional)</span>
+                  Age
                 </label>
                 <div className="relative">
                   <input
                     type="number"
-                    min={1}
-                    max={150}
+                    required
+                    min={10}
+                    max={120}
                     value={age}
                     onChange={(e) => setAge(e.target.value)}
                     placeholder="22"
@@ -557,14 +1193,14 @@ function SignupForm() {
               <div className="space-y-1.5">
                 <label className="font-bold text-slate-200 tracking-wide flex items-center gap-1.5">
                   <MapPin className="w-3.5 h-3.5 text-emergency-400" />
-                  City <span className="text-slate-500 font-normal">(optional)</span>
+                  City <span className="font-normal text-slate-500">(optional)</span>
                 </label>
                 <div className="relative">
                   <input
                     type="text"
                     value={city}
                     onChange={(e) => setCity(e.target.value)}
-                    placeholder="e.g. Bengaluru, Mumbai"
+                    placeholder="e.g. Bengaluru, Mumbai (optional)"
                     className="w-full rounded-xl bg-black/50 border border-slate-700/80 px-3.5 py-3 text-sm text-white placeholder:text-slate-500 focus:outline-none focus:border-emergency-500 focus:ring-2 focus:ring-emergency-500/25 transition"
                   />
                 </div>
@@ -572,107 +1208,21 @@ function SignupForm() {
               <div className="space-y-1.5">
                 <label className="font-bold text-slate-200 tracking-wide flex items-center gap-1.5">
                   <Phone className="w-3.5 h-3.5 text-emergency-400" />
-                  Contact Number <span className="text-slate-500 font-normal">(optional)</span>
+                  Contact Number <span className="font-normal text-slate-500">(optional)</span>
                 </label>
                 <div className="relative">
                   <input
                     type="tel"
                     value={phone}
                     onChange={(e) => setPhone(e.target.value)}
-                    placeholder="+91 98XXX XXXXX"
+                    placeholder="+91 98XXX XXXXX (optional)"
                     className="w-full rounded-xl bg-black/50 border border-slate-700/80 px-3.5 py-3 text-sm text-white placeholder:text-slate-500 focus:outline-none focus:border-emergency-500 focus:ring-2 focus:ring-emergency-500/25 transition"
                   />
                 </div>
               </div>
             </div>
 
-            {/* PASSWORD ROW */}
-            <div className="grid sm:grid-cols-2 gap-3">
-              <div className="space-y-1.5">
-                <label className="font-bold text-slate-200 tracking-wide flex items-center gap-1.5">
-                  <Lock className="w-3.5 h-3.5 text-emergency-400" />
-                  Create Password
-                </label>
-                <div className="relative">
-                  <input
-                    type={showPw ? "text" : "password"}
-                    required
-                    value={password}
-                    onChange={(e) => setPassword(e.target.value)}
-                    placeholder="Min 6 characters"
-                    className="w-full rounded-xl bg-black/50 border border-slate-700/80 px-3.5 pr-11 py-3 text-sm text-white placeholder:text-slate-500 focus:outline-none focus:border-emergency-500 focus:ring-2 focus:ring-emergency-500/25 transition"
-                  />
-                  <button
-                    type="button"
-                    onClick={() => setShowPw((s) => !s)}
-                    className="absolute right-3 top-1/2 -translate-y-1/2 text-slate-500 hover:text-slate-300 transition-colors"
-                    aria-label={showPw ? "Hide password" : "Show password"}
-                  >
-                    {showPw ? <EyeOff className="w-4 h-4" /> : <Eye className="w-4 h-4" />}
-                  </button>
-                </div>
-                {/* Strength */}
-                {password && (
-                  <div className="flex items-center gap-2 pt-0.5">
-                    <div className="flex-1 h-1 rounded-full bg-slate-800 overflow-hidden">
-                      <div
-                        className={`h-full rounded-full transition-all ${
-                          passwordStrong
-                            ? "bg-emerald-500 w-full"
-                            : password.length >= 6
-                            ? "bg-amber-500 w-2/3"
-                            : "bg-red-500 w-1/3"
-                        }`}
-                      />
-                    </div>
-                    <span
-                      className={`text-[10px] font-bold tracking-wide ${
-                        passwordStrong
-                          ? "text-emerald-400"
-                          : password.length >= 6
-                          ? "text-amber-400"
-                          : "text-red-400"
-                      }`}
-                    >
-                      {passwordStrong ? "STRONG" : password.length >= 6 ? "OK" : "WEAK"}
-                    </span>
-                  </div>
-                )}
-              </div>
-              <div className="space-y-1.5">
-                <label className="font-bold text-slate-200 tracking-wide flex items-center gap-1.5">
-                  <Lock className="w-3.5 h-3.5 text-emergency-400" />
-                  Confirm Password
-                </label>
-                <div className="relative">
-                  <input
-                    type={showPw ? "text" : "password"}
-                    required
-                    value={confirmPassword}
-                    onChange={(e) => setConfirmPassword(e.target.value)}
-                    placeholder="Confirm password"
-                    className="w-full rounded-xl bg-black/50 border border-slate-700/80 px-3.5 py-3 text-sm text-white placeholder:text-slate-500 focus:outline-none focus:border-emergency-500 focus:ring-2 focus:ring-emergency-500/25 transition"
-                  />
-                </div>
-                {confirmPassword && password && (
-                  <div className="flex items-center gap-1.5 pt-0.5 text-[10px]">
-                    {password === confirmPassword ? (
-                      <>
-                        <CheckCircle2 className="w-3 h-3 text-emerald-400" />
-                        <span className="text-emerald-400 font-bold tracking-wide">MATCHES</span>
-                      </>
-                    ) : (
-                      <>
-                        <AlertCircle className="w-3 h-3 text-red-400" />
-                        <span className="text-red-400 font-bold tracking-wide">DOES NOT MATCH</span>
-                      </>
-                    )}
-                  </div>
-                )}
-              </div>
-            </div>
-
-            {/* Second confidentiality checkbox-style notice */}
+            {/* Password generation notice */}
             <div
               className="p-3 rounded-xl flex gap-2.5 items-start"
               style={{
@@ -682,20 +1232,14 @@ function SignupForm() {
             >
               <Fingerprint className="w-4 h-4 text-emergency-400 shrink-0 mt-0.5" />
               <div className="text-[10.5px] text-slate-400 leading-relaxed">
-                <span className="text-emergency-300 font-bold">Your safety data is confidential.</span>{" "}
-                Age, city, and phone are stored on your device first and transmitted encrypted. This helps Cyber Sakhi dispatch faster during an SOS.
+                <span className="text-emergency-300 font-bold">Auto-generated password:</span>{" "}
+                A secure password will be generated automatically and shown once after signup. Save it securely.
               </div>
             </div>
 
             <button
               type="submit"
-              disabled={
-                isLoading ||
-                !name.trim() ||
-                !email.trim() ||
-                !password ||
-                (!!confirmPassword && password !== confirmPassword)
-              }
+              disabled={isLoading || !name.trim() || !email.trim() || !age}
               className="w-full py-4 rounded-xl text-white font-bold tracking-wide text-sm transition flex items-center justify-center gap-2 disabled:opacity-50 mt-1"
               style={{
                 background:
