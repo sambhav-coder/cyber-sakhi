@@ -1,6 +1,7 @@
 import { NextAuthOptions } from "next-auth";
 import CredentialsProvider from "next-auth/providers/credentials";
 import GoogleProvider from "next-auth/providers/google";
+import { AUTH_SECRET } from "./authSecret";
 import { findProfileByEmail } from "./db/profiles";
 import {
   findUserByEmail,
@@ -186,7 +187,7 @@ export const authOptions: NextAuthOptions = {
     error: "/login",
   },
 
-  secret: process.env.NEXTAUTH_SECRET || "cyber-sakhi-security-secret-key-2026-auth",
+  secret: AUTH_SECRET,
 
   // Debug: log NEXTAUTH_URL in development to help diagnose OAuth issues
   debug: process.env.NODE_ENV === "development",

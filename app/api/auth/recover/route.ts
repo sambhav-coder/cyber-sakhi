@@ -6,6 +6,11 @@ import {
   createRecoveryToken,
   consumeRecoveryToken,
 } from "@/lib/recoveryTokens";
+import {
+  isEmailConfigured,
+  missingEmailConfig,
+  sendRecoveryEmail,
+} from "@/lib/mailer";
 
 const GENERIC_MESSAGE =
   "If an account exists for this email, recovery instructions have been sent.";
@@ -40,9 +45,23 @@ export async function POST(req: NextRequest) {
       return NextResponse.json({ error: "Enter a valid email address." }, { status: 400 });
     }
 
+    // Production must have a real email transport. Check BEFORE the profile
+    // lookup so a misconfigured deployment returns the SAME error for every
+    // email address (no account-existence leak) instead of silently pretending
+    // recovery instructions were sent. In development the devLink is sufficient.
+    if (process.env.NODE_ENV === "production" && !isEmailConfigured()) {
+      const missing = missingEmailConfig();
+      return NextResponse.json(
+        {
+          error: `Recovery email could not be sent because the email provider is not configured. Missing environment variables: ${missing.join(", ")}.`,
+        },
+        { status: 503 }
+      );
+    }
+
     const profile = await findProfileByEmail(email);
 
-    // Generic response regardless of whether the account exists (anti-enumeration).
+    // Anti-enumeration: identical response whether or not the account exists.
     if (!profile) {
       return NextResponse.json({ message: GENERIC_MESSAGE });
     }
@@ -54,15 +73,29 @@ export async function POST(req: NextRequest) {
     const origin = req.nextUrl.origin;
     const recoveryLink = `${origin}/recover?token=${encodeURIComponent(token)}`;
 
-    // Email delivery is not configured (no SMTP / Resend / SendGrid env vars),
-    // so in a development build we surface the recovery link to the local UI.
-    // In production the link is never returned to the client — only the
-    // generic message above — so a configured email sender can deliver it.
+    // Development convenience: surface the recovery link to the local UI so
+    // the reset flow can be exercised without a real inbox. Production never
+    // returns the link — the email is the only channel.
     if (process.env.NODE_ENV !== "production") {
       return NextResponse.json({
         message: GENERIC_MESSAGE,
         devLink: recoveryLink,
       });
+    }
+
+    // Production: the transport is already guaranteed configured above.
+    const sendResult = await sendRecoveryEmail({
+      to: profile.email,
+      name: profile.name,
+      recoveryLink,
+    });
+
+    if (!sendResult.ok) {
+      console.error("[recover] Email send failed:", sendResult.error);
+      return NextResponse.json(
+        { error: "The recovery email could not be delivered. Please try again later." },
+        { status: 502 }
+      );
     }
 
     return NextResponse.json({ message: GENERIC_MESSAGE });

@@ -1,5 +1,6 @@
 import { withAuth } from "next-auth/middleware";
 import { NextResponse } from "next/server";
+import { AUTH_SECRET } from "@/lib/authSecret";
 
 // Every app shell / feature page is protected. Middleware is the source of
 // truth: unauthenticated users are redirected to /login (with a callbackUrl
@@ -37,6 +38,7 @@ export default withAuth(
     }
   },
   {
+    secret: AUTH_SECRET,
     callbacks: {
       authorized: ({ token, req }) => {
         // Every protected route requires active authentication. withAuth
