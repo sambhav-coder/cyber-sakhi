@@ -57,6 +57,15 @@ export default withAuth(
     pages: {
       signIn: "/login",
     },
+    cookies: {
+      sessionToken: {
+        name:
+          process.env.NEXTAUTH_URL?.startsWith("https://") ||
+          !!process.env.VERCEL_URL
+            ? "__Secure-next-auth.session-token"
+            : "next-auth.session-token",
+      },
+    },
   }
 );
 
