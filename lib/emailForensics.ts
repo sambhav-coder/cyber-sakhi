@@ -1,6 +1,8 @@
 import { lookupIpIntelligence } from "./ipIntelligence";
 import { lookupDomainIntelligence } from "./domainIntelligence";
 import { correlateIndicators } from "./indicatorCorrelation";
+import { analyzeMessage } from "./threatEngine";
+import type { ThreatAnalysisResult } from "./types";
 import {
   EmailAnalysisResult,
   EmailAuthentication,
@@ -245,7 +247,8 @@ function extractIpAddresses(text: string): string[] {
 function computeThreatScore(
   authResult: EmailAuthentication,
   spoofing: SpoofingResult,
-  phishing: PhishingResult
+  phishing: PhishingResult,
+  harassment: ThreatAnalysisResult | null
 ): { score: number; level: EmailAnalysisResult["threatLevel"] } {
   let score = 0;
 
@@ -264,6 +267,18 @@ function computeThreatScore(
 
   // Phishing content
   score += phishing.score * 0.4; // weight phishing score at 40%
+
+  /* Harassment content.
+   *
+   * The phishing rules above only cover bank/credential scams, so a
+   * sextortion email sent from a genuine Gmail account scored 0: every
+   * header check correctly passes, and no content rule matches. The
+   * harassment engine that already powers /detector is folded in here at
+   * full weight, because for this product a credible threat is the
+   * headline finding, not a supporting signal. */
+  if (harassment) {
+    score = Math.max(score, harassment.score);
+  }
 
   score = Math.min(100, Math.round(score));
 
@@ -289,9 +304,21 @@ function buildFindings(
   auth: EmailAuthentication,
   spoofing: SpoofingResult,
   phishing: PhishingResult,
-  hasOriginatingIp: boolean
+  hasOriginatingIp: boolean,
+  harassment: ThreatAnalysisResult | null
 ): string[] {
   const findings: string[] = [];
+
+  // Harassment leads the findings list: if someone is being threatened,
+  // that matters more to the reader than an SPF verdict.
+  if (harassment && harassment.threatLevel !== "SAFE") {
+    findings.push(
+      `Harassment content detected (${harassment.threatLevel}, ${harassment.score}/100): ${harassment.triggers.join(", ")}`
+    );
+    for (const section of harassment.legalSections) {
+      findings.push(`Applicable law: ${section.code} — ${section.title}`);
+    }
+  }
 
   // Auth findings
   if (auth.spf.status === "pass") findings.push("✓ SPF check passed — sending server is authorized by the domain's DNS record.");
@@ -404,6 +431,17 @@ export async function analyzeEmail(rawEmailInput: string): Promise<EmailAnalysis
   ].join(" ");
   const phishing = scorePhishing(contentToScore);
 
+  /* Step G2: Harassment / threat scoring.
+   *
+   * Reuses the same engine that powers /detector, so blackmail,
+   * stalking, sexual harassment and violence — in English or Hinglish —
+   * are detected in email too. The body is scored rather than the raw
+   * source, so header boilerplate cannot trip the rules. */
+  const bodyText = extractBodyText(rawEmailInput);
+  const harassmentInput = [headers.subject || "", bodyText].join("\n").trim();
+  const harassment =
+    harassmentInput.length > 0 ? analyzeMessage(harassmentInput) : null;
+
   // Step H: Originating IP — the last external hop typically carries the real sender IP
   const allIps = extractIpAddresses(headers.rawHeaders);
   // Prefer IP found in the outermost (last) Received header
@@ -500,11 +538,18 @@ export async function analyzeEmail(rawEmailInput: string): Promise<EmailAnalysis
   const { score: threatScore, level: threatLevel } = computeThreatScore(
     authentication,
     spoofing,
-    phishing
+    phishing,
+    harassment
   );
 
   // Step K: Build findings and recommendations
-  const findings = buildFindings(authentication, spoofing, phishing, !!originatingIP);
+  const findings = buildFindings(
+    authentication,
+    spoofing,
+    phishing,
+    !!originatingIP,
+    harassment
+  );
   const recommendations = buildRecommendations(threatLevel, spoofing);
 
   // Step L: Correlate extracted indicators with forensic findings
@@ -526,9 +571,28 @@ export async function analyzeEmail(rawEmailInput: string): Promise<EmailAnalysis
     indicators,
     threatLevel,
     threatScore,
+    harassment: harassment
+      ? {
+          level: harassment.threatLevel,
+          score: harassment.score,
+          categories: harassment.categories,
+          triggers: harassment.triggers,
+          legalSections: harassment.legalSections,
+          summary: harassment.summary,
+        }
+      : undefined,
     findings,
     recommendations,
   };
+}
+
+/**
+ * Everything after the first blank line is the body. Header text is
+ * excluded so boilerplate cannot trigger the harassment rules.
+ */
+function extractBodyText(raw: string): string {
+  const split = raw.search(/\r?\n\r?\n/);
+  return split === -1 ? "" : raw.slice(split).trim();
 }
 
 // ---------------------------------------------------------------------------

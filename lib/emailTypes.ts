@@ -78,6 +78,15 @@ export interface EmailAnalysisResult {
   indicators: ThreatIndicator[];
   threatLevel: "SAFE" | "LOW" | "MEDIUM" | "HIGH" | "CRITICAL";
   threatScore: number;
+  /** Harassment / threat verdict from the shared rule engine. */
+  harassment?: {
+    level: "SAFE" | "LOW" | "MEDIUM" | "HIGH" | "CRITICAL";
+    score: number;
+    categories: string[];
+    triggers: string[];
+    legalSections: { code: string; title: string; penalty: string }[];
+    summary: string;
+  };
   findings: string[];
   recommendations: string[];
 }
