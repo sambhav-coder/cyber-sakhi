@@ -67,13 +67,13 @@ export async function GET(req: NextRequest) {
     );
   }
 
-  const clientId = process.env.GOOGLE_CLIENT_ID;
-  const clientSecret = process.env.GOOGLE_CLIENT_SECRET;
+  const clientId = process.env.GOOGLE_GMAIL_CLIENT_ID;
+  const clientSecret = process.env.GOOGLE_GMAIL_CLIENT_SECRET;
 
   if (!clientId || !clientSecret) {
     return NextResponse.json(
       {
-        error: "Google OAuth credentials are not configured.",
+        error: "Gmail OAuth is not configured on the server.",
       },
       { status: 500 }
     );

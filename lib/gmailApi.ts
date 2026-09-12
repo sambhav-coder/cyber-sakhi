@@ -23,11 +23,11 @@ export function parseGmailToken(
 export async function refreshGmailAccessToken(
   refreshToken: string
 ): Promise<GmailTokenPayload> {
-  const clientId = process.env.GOOGLE_CLIENT_ID;
-  const clientSecret = process.env.GOOGLE_CLIENT_SECRET;
+  const clientId = process.env.GOOGLE_GMAIL_CLIENT_ID;
+  const clientSecret = process.env.GOOGLE_GMAIL_CLIENT_SECRET;
 
   if (!clientId || !clientSecret) {
-    throw new Error("Google OAuth credentials are not configured.");
+    throw new Error("Gmail OAuth credentials are not configured.");
   }
 
   const response = await fetch(
