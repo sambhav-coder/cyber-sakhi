@@ -173,3 +173,34 @@
   0%, 100% { transform: scaleY(0.45); opacity: 0.6; }
   50%      { transform: scaleY(1); opacity: 1; }
 }
+
+/* Email Forensics live scan sweep */
+.hero-scanline {
+  position: absolute;
+  left: -8%;
+  right: -8%;
+  height: 1px;
+  background: linear-gradient(
+    90deg,
+    transparent,
+    rgba(239, 68, 68, 0.7),
+    rgba(239, 68, 68, 0.25),
+    transparent
+  );
+  box-shadow: 0 0 18px 2px rgba(220, 38, 38, 0.35);
+  animation: scanSweep 6s ease-in-out infinite;
+  pointer-events: none;
+}
+@keyframes scanSweep {
+  0%   { top: 8%; opacity: 0; }
+  8%   { opacity: 1; }
+  50%  { opacity: 0.85; }
+  92%  { opacity: 1; }
+  100% { top: 92%; opacity: 0; }
+}
+@media (prefers-reduced-motion: reduce) {
+  .hero-scanline {
+    animation: none;
+    opacity: 0;
+  }
+}

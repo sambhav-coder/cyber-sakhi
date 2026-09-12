@@ -63,13 +63,16 @@ export async function POST(req: NextRequest) {
     // Discovery call (no age yet): figure out what the oauth user needs.
     if (!providingAge) {
       if (existingUser?.passwordHash) {
-        // Returning user — their existing profile is already attached to the
-        // OAuth session by the jwt callback, so they are legitimately signed
-        // in. Send them to the dashboard; the session must stay intact.
-        return NextResponse.json({
-          message: "Account already exists",
-          redirectTo: "/dashboard",
-        });
+        // Existing Cyber Sakhi account: Google is SIGN-UP only. Never create
+        // a profile, never generate a Sakhi Number, never overwrite the
+        // existing password, and never auto-log-in. End the OAuth session
+        // and send the user to the credentials login with a clear message.
+        return expireSessionCookies(
+          NextResponse.json({
+            message: "Account already exists",
+            redirectTo: "/login?google=exists",
+          })
+        );
       }
       // New user (or a legacy incomplete OAuth profile): age is mandatory.
       // Keep the OAuth session so the following age-step call can complete.
@@ -111,7 +114,14 @@ export async function POST(req: NextRequest) {
     let newUser;
     if (existingUser) {
       if (existingUser.passwordHash) {
-        return NextResponse.json({ redirectTo: "/dashboard" });
+        // Same guard as the discovery call: an already-registered account
+        // must never be re-provisioned or auto-signed-in via Google.
+        return expireSessionCookies(
+          NextResponse.json({
+            message: "Account already exists",
+            redirectTo: "/login?google=exists",
+          })
+        );
       }
       // Legacy incomplete OAuth profile: fill in the missing details.
       newUser = await updateProfileDetails(existingUser.id, {

@@ -1,6 +1,6 @@
 "use client";
 
-import React, { useEffect, useState } from "react";
+import React, { useEffect, useLayoutEffect, useRef, useState } from "react";
 import { useRouter } from "next/navigation";
 import Link from "next/link";
 import {
@@ -29,13 +29,26 @@ import {
   ArrowRight,
   Inbox as InboxIcon,
   FolderOpen,
+  ExternalLink,
+  FileSearch,
+  Fingerprint,
+  RotateCcw,
 } from "lucide-react";
-import { EmailAnalysisResult, AuthenticationResult, SMTPHop, ThreatIndicator } from "@/lib/emailTypes";
+import {
+  EmailAnalysisResult,
+  AuthenticationResult,
+  SMTPHop,
+  ThreatIndicator,
+  ForensicFinding,
+  ForensicCategory,
+} from "@/lib/emailTypes";
 import { addEvidenceItem } from "@/lib/storage";
 import { computeSha256 } from "@/lib/cryptoUtils";
 import { EvidenceItem } from "@/lib/types";
 import { SectionHeader } from "@/components/ui/SectionHeader";
 import { EyebrowBadge } from "@/components/ui/EyebrowBadge";
+
+const TEXTAREA_MAX_HEIGHT = 320;
 
 // ---------------------------------------------------------------------------
 // Sub-components
@@ -207,6 +220,134 @@ function IndicatorRow({ indicator }: { indicator: ThreatIndicator }) {
   );
 }
 
+const FINDING_SEVERITY: Record<
+  ForensicFinding["severity"],
+  { chip: string; border: string }
+> = {
+  CRITICAL: {
+    chip: "bg-red-950 border-red-600/60 text-red-300",
+    border: "border-l-red-500",
+  },
+  HIGH: {
+    chip: "bg-orange-950 border-orange-600/60 text-orange-300",
+    border: "border-l-orange-500",
+  },
+  MEDIUM: {
+    chip: "bg-amber-950 border-amber-600/60 text-amber-300",
+    border: "border-l-amber-500",
+  },
+  LOW: {
+    chip: "bg-sky-950 border-sky-600/60 text-sky-300",
+    border: "border-l-sky-500",
+  },
+  SAFE: {
+    chip: "bg-emerald-950 border-emerald-600/60 text-emerald-300",
+    border: "border-l-emerald-500",
+  },
+};
+
+const FINDING_CATEGORY_LABELS: Record<ForensicCategory, string> = {
+  AUTHENTICATION: "Email Authentication",
+  SENDER_SPOOFING: "Sender Spoofing",
+  DOMAIN: "Domain Intelligence",
+  IP: "IP Intelligence",
+  SMTP_ROUTING: "SMTP Routing",
+  URL: "Link Analysis",
+  ATTACHMENT: "Attachment Analysis",
+  NLP_SOCIAL_ENGINEERING: "Social Engineering",
+  THREAT_INTELLIGENCE: "Threat Intelligence",
+  ANOMALY: "Anomaly",
+};
+
+const FINDING_SEVERITY_RANK: Record<ForensicFinding["severity"], number> = {
+  SAFE: 0,
+  LOW: 1,
+  MEDIUM: 2,
+  HIGH: 3,
+  CRITICAL: 4,
+};
+
+function FindingSummaryChips({ findings }: { findings: ForensicFinding[] }) {
+  const counts = findings.reduce<Partial<Record<ForensicFinding["severity"], number>>>(
+    (acc, f) => {
+      acc[f.severity] = (acc[f.severity] || 0) + 1;
+      return acc;
+    },
+    {}
+  );
+  const order: ForensicFinding["severity"][] = ["CRITICAL", "HIGH", "MEDIUM", "LOW", "SAFE"];
+
+  return (
+    <div className="flex flex-wrap gap-1.5">
+      {order.map((s) =>
+        counts[s] ? (
+          <span
+            key={s}
+            className={`text-[10px] px-2 py-1 rounded-lg border font-bold ${FINDING_SEVERITY[s].chip}`}
+          >
+            {s} {counts[s]}
+          </span>
+        ) : null
+      )}
+    </div>
+  );
+}
+
+function FindingCard({ finding }: { finding: ForensicFinding }) {
+  const sev = FINDING_SEVERITY[finding.severity] || FINDING_SEVERITY.LOW;
+  const catLabel = FINDING_CATEGORY_LABELS[finding.category] || finding.category;
+
+  return (
+    <div className={`rounded-xl border-l-4 border border-slate-800 bg-slate-950/70 p-4 space-y-3 min-w-0 ${sev.border}`}>
+      <div className="flex flex-col gap-2 sm:flex-row sm:items-center sm:justify-between">
+        <div className="flex flex-wrap items-center gap-2 min-w-0">
+          <span
+            className={`text-[10px] font-bold uppercase tracking-wider px-2 py-0.5 rounded-md border ${sev.chip}`}
+          >
+            {finding.severity}
+          </span>
+          <span className="text-[10px] font-bold uppercase tracking-widest text-slate-400">
+            {catLabel}
+          </span>
+        </div>
+        {finding.confidence != null && (
+          <span className="text-[10px] font-mono text-slate-500 shrink-0">
+            confidence {Math.round(finding.confidence * 100)}%
+          </span>
+        )}
+      </div>
+
+      <div className="text-sm font-semibold text-slate-100 break-words">
+        {finding.description}
+      </div>
+
+      {finding.humanExplanation && (
+        <p className="text-xs leading-relaxed text-slate-300 break-words">
+          {finding.humanExplanation}
+        </p>
+      )}
+
+      {finding.technicalEvidence && (
+        <div className="rounded-lg bg-slate-900 border border-slate-800 px-3 py-2 min-w-0">
+          <div className="text-[9px] uppercase tracking-widest text-slate-500 mb-1">
+            Technical Evidence
+          </div>
+          <div className="text-[11px] font-mono text-slate-400 break-all min-w-0">
+            {finding.technicalEvidence}
+          </div>
+        </div>
+      )}
+
+      {finding.recommendedAction && (
+        <div className="flex items-start gap-2 text-[11px] text-emergency-200">
+          <Shield className="w-3.5 h-3.5 text-emergency-400 shrink-0 mt-0.5" />
+          <span className="break-words">{finding.recommendedAction}</span>
+        </div>
+      )}
+    </div>
+  );
+}
+
 // ---------------------------------------------------------------------------
 // Sample email to help the user test
 // ---------------------------------------------------------------------------
@@ -271,6 +412,24 @@ export default function EmailForensicsPage() {
     severity: string | null;
   } | null>(null);
   const [caseSaveError, setCaseSaveError] = useState<string | null>(null);
+  const [mounted, setMounted] = useState(false);
+
+  useEffect(() => {
+    const raf = requestAnimationFrame(() => setMounted(true));
+    return () => cancelAnimationFrame(raf);
+  }, []);
+
+  const textareaRef = useRef<HTMLTextAreaElement | null>(null);
+
+  useLayoutEffect(() => {
+    const el = textareaRef.current;
+    if (!el) return;
+    el.style.height = "auto";
+    const needs = el.scrollHeight;
+    const capped = Math.min(needs, TEXTAREA_MAX_HEIGHT);
+    el.style.height = `${capped}px`;
+    el.style.overflowY = needs > TEXTAREA_MAX_HEIGHT ? "auto" : "hidden";
+  }, [rawEmail]);
 
   useEffect(() => {
     try {
@@ -481,172 +640,459 @@ ${result.indicators.map(i => `• ${i.type}: ${i.value}${i.malicious ? " (SUSPIC
     setMode("paste");
   };
 
+  const handleAnalyzeAnother = () => {
+    setMode("choose");
+    setResult(null);
+    setRawEmail("");
+    setError(null);
+    setCaseLink(null);
+    setCaseSaveError(null);
+    setSavedEvidenceId(null);
+    setSaveError(null);
+    setSaveSuccess(false);
+    window.scrollTo(0, 0);
+  };
+
   const showChooseMode = !result && mode === "choose";
   const showPasteMode = !result && mode === "paste";
 
   return (
     <div className="space-y-8 animate-in fade-in duration-300">
-      {/* Page Header */}
-      <div className="space-y-2">
-        <EyebrowBadge icon={Mail}>
-          <span>Email Forensic Investigator</span>
-        </EyebrowBadge>
-        <h1 className="text-2xl sm:text-3xl font-extrabold text-white">
-          {showPasteMode ? "Paste Raw Email" : result ? "Email Forensic Report" : "Email Forensics"}
-        </h1>
-        <p className="text-sm text-slate-300 max-w-2xl">
-          {showPasteMode
-            ? "Paste the full raw email source below and run Cyber Sakhi's forensic analysis engine on it."
-            : result
-            ? "Forensic results for the email you analyzed. Review authentication, SMTP path, indicators, risk score, and recommendations."
-            : "Something in this email doesn't look right? Let's investigate it together."}
-        </p>
-        <p className="text-xs text-slate-400 max-w-2xl">
-          {result
-            ? null
-            : "Investigate suspicious email with Cyber Sakhi's unified forensic engine — either paste a raw email source directly, or connect Gmail and analyze a message from your real inbox. Both methods run the same SPF / DKIM / DMARC, spoofing, SMTP-path, and threat-indicator analysis."}
-        </p>
-      </div>
-
-      {showChooseMode && (
+      {showChooseMode ? (
         <>
-          {/* Investigation Entry Points */}
-          <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
-            <button
-              type="button"
-              onClick={selectPasteMode}
-              className="group p-5 rounded-2xl bg-slate-900/80 hover:bg-slate-900 border border-slate-800 hover:border-emergency-700/40 space-y-3 flex flex-col text-left transition cursor-pointer"
-            >
-              <div className="flex items-start gap-3">
-                <div className="w-10 h-10 rounded-xl bg-emergency-950/50 border border-emergency-700/40 flex items-center justify-center shrink-0">
-                  <FileText className="w-5 h-5 text-emergency-300" />
-                </div>
-                <div className="space-y-1 flex-1 min-w-0">
-                  <div className="text-sm font-black text-white flex items-center gap-2">
-                    A) Paste Raw Email
-                    <ArrowRight className="w-3.5 h-3.5 text-emergency-400 opacity-0 group-hover:opacity-100 translate-x-0 group-hover:translate-x-0.5 transition-all" />
-                  </div>
-                  <p className="text-[12px] text-slate-400 leading-5">
-                    Paste the complete raw email source (headers + body) for any email you already have exported. Works with any provider — Gmail, Outlook, Apple Mail, ProtonMail, etc.
-                  </p>
-                </div>
+          {/* ================= CINEMATIC ENTRY HERO ================= */}
+          <section className="relative overflow-hidden pt-4 sm:pt-8">
+            {/* Ambient crimson atmosphere + faint forensic grid */}
+            <div aria-hidden className="pointer-events-none absolute inset-0 -z-10">
+              <div
+                className="absolute inset-0"
+                style={{
+                  backgroundImage:
+                    "linear-gradient(rgba(239,68,68,0.05) 1px, transparent 1px), linear-gradient(90deg, rgba(239,68,68,0.05) 1px, transparent 1px)",
+                  backgroundSize: "44px 44px",
+                  maskImage:
+                    "radial-gradient(ellipse 75% 70% at 50% 20%, black 30%, transparent 78%)",
+                  WebkitMaskImage:
+                    "radial-gradient(ellipse 75% 70% at 50% 20%, black 30%, transparent 78%)",
+                }}
+              />
+              <div
+                className="absolute left-1/2 -top-36 -translate-x-1/2 w-[680px] h-[420px] rounded-full"
+                style={{
+                  background:
+                    "radial-gradient(circle, rgba(185,28,28,0.30) 0%, rgba(185,28,28,0.07) 45%, transparent 70%)",
+                  filter: "blur(34px)",
+                }}
+              />
+              <div
+                className="absolute -bottom-24 -left-28 w-[440px] h-[320px] rounded-full"
+                style={{
+                  background:
+                    "radial-gradient(circle, rgba(127,29,29,0.22) 0%, transparent 70%)",
+                  filter: "blur(40px)",
+                }}
+              />
+              <div
+                className="absolute -bottom-20 -right-28 w-[440px] h-[320px] rounded-full"
+                style={{
+                  background:
+                    "radial-gradient(circle, rgba(185,28,28,0.16) 0%, transparent 70%)",
+                  filter: "blur(40px)",
+                }}
+              />
+            </div>
+
+            {/* Live scan sweep */}
+            <div className="hero-scanline" aria-hidden />
+
+            {/* Corner focus brackets */}
+            <span
+              aria-hidden
+              className="pointer-events-none absolute left-3 top-3 h-8 w-8 rounded-tl-xl border-l-2 border-t-2 border-emergency-500/30"
+            />
+            <span
+              aria-hidden
+              className="pointer-events-none absolute right-3 top-3 h-8 w-8 rounded-tr-xl border-r-2 border-t-2 border-emergency-500/30"
+            />
+            <span
+              aria-hidden
+              className="pointer-events-none absolute bottom-3 left-3 h-8 w-8 rounded-bl-xl border-b-2 border-l-2 border-emergency-500/30"
+            />
+            <span
+              aria-hidden
+              className="pointer-events-none absolute bottom-3 right-3 h-8 w-8 rounded-br-xl border-b-2 border-r-2 border-emergency-500/30"
+            />
+
+            <div className="relative z-10 mx-auto max-w-4xl px-4 pt-10 pb-4 text-center sm:pt-14">
+              <div
+                className={`transition-all duration-1000 ease-out ${
+                  mounted ? "opacity-100 translate-y-0" : "opacity-0 translate-y-6"
+                } motion-reduce:opacity-100 motion-reduce:translate-y-0`}
+                style={{ transitionDelay: "80ms" }}
+              >
+                <EyebrowBadge icon={Mail}>
+                  <span>Email Forensic Investigator</span>
+                </EyebrowBadge>
               </div>
 
-              <ul className="space-y-1.5 text-[11px] text-slate-400">
-                <li className="flex items-start gap-1.5">
-                  <CheckCircle2 className="w-3.5 h-3.5 text-emerald-400 shrink-0 mt-0.5" />
-                  <span>Full SPF / DKIM / DMARC authentication verification</span>
-                </li>
-                <li className="flex items-start gap-1.5">
-                  <CheckCircle2 className="w-3.5 h-3.5 text-emerald-400 shrink-0 mt-0.5" />
-                  <span>SMTP relay-chain reconstruction + origin IP intelligence</span>
-                </li>
-                <li className="flex items-start gap-1.5">
-                  <CheckCircle2 className="w-3.5 h-3.5 text-emerald-400 shrink-0 mt-0.5" />
-                  <span>Domain, URL, email, and IP threat indicators</span>
-                </li>
-              </ul>
-
-              <div className="pt-1 mt-auto flex items-center justify-between">
-                <span className="text-[11px] font-semibold text-slate-400 group-hover:text-emergency-200 transition">
-                  Open the Paste Raw Email workflow
+              <h1
+                className={`mt-6 transition-all duration-1000 ease-out ${
+                  mounted ? "opacity-100 translate-y-0" : "opacity-0 translate-y-6"
+                } motion-reduce:opacity-100 motion-reduce:translate-y-0`}
+                style={{ transitionDelay: "220ms" }}
+              >
+                <span className="font-black tracking-tight text-white text-4xl sm:text-6xl md:text-7xl">
+                  Email <span className="text-crimson-gradient">Forensics</span>
                 </span>
-                <div className="inline-flex items-center gap-1.5 text-[11px] font-black px-3 py-1.5 rounded-lg bg-emergency-600 hover:bg-emergency-500 text-white transition shadow-emergency-950/30">
-                  <FileText className="w-3.5 h-3.5" />
-                  <span>Continue</span>
-                </div>
-              </div>
-            </button>
+              </h1>
 
-            <button
-              type="button"
-              onClick={openGmailInvestigation}
-              className="group p-5 rounded-2xl bg-slate-900/60 hover:bg-slate-900/90 border border-slate-800 hover:border-emergency-700/40 space-y-3 flex flex-col text-left transition cursor-pointer"
-            >
-              <div className="flex items-start gap-3">
-                <div className="w-10 h-10 rounded-xl bg-emergency-950/40 border border-emergency-700/40 flex items-center justify-center shrink-0">
-                  <InboxIcon className="w-5 h-5 text-white" />
+              <div
+                className={`transition-all duration-1000 ease-out ${
+                  mounted ? "opacity-100 translate-y-0" : "opacity-0 translate-y-6"
+                } motion-reduce:opacity-100 motion-reduce:translate-y-0`}
+                style={{ transitionDelay: "380ms" }}
+              >
+                <div className="mt-6 inline-flex items-center gap-2 rounded-full border border-emergency-500/25 bg-emergency-950/50 px-3 py-1 backdrop-blur-md">
+                  <span className="relative flex h-1.5 w-1.5">
+                    <span className="absolute inline-flex h-full w-full animate-ping rounded-full bg-emergency-400 opacity-75 motion-reduce:animate-none" />
+                    <span className="relative inline-flex h-1.5 w-1.5 rounded-full bg-emergency-500" />
+                  </span>
+                  <span className="text-[10px] font-bold uppercase tracking-[0.28em] text-emergency-200">
+                    Live Investigation Lab
+                  </span>
                 </div>
-                <div className="space-y-1 flex-1 min-w-0">
-                  <div className="text-sm font-black text-white flex items-center gap-2">
-                    B) Connect Gmail
-                    <ArrowRight className="w-3.5 h-3.5 text-emergency-400 opacity-0 group-hover:opacity-100 translate-x-0 group-hover:translate-x-0.5 transition-all" />
+                <p className="mx-auto mt-5 max-w-2xl text-sm font-light leading-relaxed tracking-wide text-slate-200 sm:text-base">
+                  Cyber Sakhi&apos;s forensic engine investigates suspicious email — authentication
+                  checks, sender-spoofing analysis, SMTP path tracing, and threat-indicator
+                  extraction.
+                </p>
+                <p className="mx-auto mt-2.5 max-w-2xl text-xs leading-relaxed text-slate-400">
+                  One unified analysis engine runs both paths below, so results are identical no matter
+                  which route you take.
+                </p>
+              </div>
+            </div>
+          </section>
+
+          {/* ================= ENTRY OPTIONS ================= */}
+          <div className="relative z-10 mx-auto mt-10 max-w-4xl px-4 pb-2 sm:mt-14 sm:px-6">
+            <div className="grid grid-cols-1 gap-5 md:grid-cols-2">
+              {/* OPTION 01 — Paste Raw Email */}
+              <div
+                className={`transition-all duration-700 ease-out ${
+                  mounted ? "opacity-100 translate-y-0" : "opacity-0 translate-y-5"
+                } motion-reduce:opacity-100 motion-reduce:translate-y-0`}
+                style={{ transitionDelay: "520ms" }}
+              >
+                <button
+                  type="button"
+                  onClick={selectPasteMode}
+                  className="glass-card group flex h-full w-full flex-col rounded-2xl p-6 text-left focus-visible:outline focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-emergency-400"
+                >
+                  <div className="flex items-start justify-between gap-3">
+                    <div className="flex items-center gap-3">
+                      <div className="flex h-11 w-11 items-center justify-center rounded-xl border border-emergency-700/40 bg-emergency-950/50 shrink-0">
+                        <FileText className="h-5 w-5 text-emergency-300" />
+                      </div>
+                      <div className="flex flex-col">
+                        <span className="text-[10px] font-bold uppercase tracking-[0.2em] text-slate-500">
+                          Option 01
+                        </span>
+                        <span className="text-[10px] font-bold uppercase tracking-[0.2em] text-emergency-400">
+                          Manual Input
+                        </span>
+                      </div>
+                    </div>
+                    <span className="font-mono text-[10px] text-slate-600 transition group-hover:text-emergency-500">
+                      RAW // PASTE
+                    </span>
                   </div>
-                  <p className="text-[12px] text-slate-400 leading-5">
-                    Securely connect Gmail with read-only access and investigate real suspicious messages from your Gmail inbox. No copying, no exports — point and investigate.
+
+                  <h2 className="mt-5 text-lg font-black tracking-tight text-white">
+                    Have an email? Paste here
+                  </h2>
+                  <p className="mt-2 text-[13px] leading-relaxed text-slate-400">
+                    Paste the full raw email source — headers and body — and run the forensic analysis
+                    engine on it. Works with Gmail, Outlook, Apple Mail, and ProtonMail exports.
                   </p>
-                </div>
+
+                  <span className="btn-emergency mt-auto w-full pt-3 pb-3 text-xs">
+                    <FileText className="h-4 w-4" />
+                    <span>Paste Raw Email</span>
+                    <ArrowRight className="h-4 w-4 transition-transform group-hover:translate-x-1" />
+                  </span>
+                </button>
               </div>
 
-              <ul className="space-y-1.5 text-[11px] text-slate-400">
-                <li className="flex items-start gap-1.5">
-                  <CheckCircle2 className="w-3.5 h-3.5 text-emerald-400 shrink-0 mt-0.5" />
-                  <span>Real Gmail messages — browse sender, subject, date, labels, preview</span>
-                </li>
-                <li className="flex items-start gap-1.5">
-                  <CheckCircle2 className="w-3.5 h-3.5 text-emerald-400 shrink-0 mt-0.5" />
-                  <span>One-click analyze on the raw MIME source from Google directly</span>
-                </li>
-                <li className="flex items-start gap-1.5">
-                  <CheckCircle2 className="w-3.5 h-3.5 text-emerald-400 shrink-0 mt-0.5" />
-                  <span>Same forensic engine — phishing score, spoofing, SMTP path, indicators</span>
-                </li>
-              </ul>
+              {/* OPTION 02 — Connect Gmail */}
+              <div
+                className={`transition-all duration-700 ease-out ${
+                  mounted ? "opacity-100 translate-y-0" : "opacity-0 translate-y-5"
+                } motion-reduce:opacity-100 motion-reduce:translate-y-0`}
+                style={{ transitionDelay: "640ms" }}
+              >
+                <button
+                  type="button"
+                  onClick={openGmailInvestigation}
+                  className="glass-card group flex h-full w-full flex-col rounded-2xl p-6 text-left focus-visible:outline focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-emergency-400"
+                >
+                  <div className="flex items-start justify-between gap-3">
+                    <div className="flex items-center gap-3">
+                      <div className="flex h-11 w-11 items-center justify-center rounded-xl border border-emergency-700/40 bg-emergency-950/40 shrink-0">
+                        <InboxIcon className="h-5 w-5 text-white" />
+                      </div>
+                      <div className="flex flex-col">
+                        <span className="text-[10px] font-bold uppercase tracking-[0.2em] text-slate-500">
+                          Option 02
+                        </span>
+                        <span className="text-[10px] font-bold uppercase tracking-[0.2em] text-emergency-400">
+                          Live Inbox
+                        </span>
+                      </div>
+                    </div>
+                    <span className="font-mono text-[10px] text-slate-600 transition group-hover:text-emergency-500">
+                      GMAIL // READ-ONLY
+                    </span>
+                  </div>
 
-              <div className="pt-1 mt-auto flex items-center justify-between">
-                <div className="inline-flex items-center gap-1.5 text-[11px] font-semibold text-slate-400 group-hover:text-emergency-200 transition">
-                  <span>Takes you to the Gmail Investigation workspace</span>
-                </div>
-                <div className="inline-flex items-center gap-1.5 text-[11px] font-black px-3 py-1.5 rounded-lg bg-emergency-600 hover:bg-emergency-500 text-white transition shadow-emergency-950/30">
-                  <Mail className="w-3.5 h-3.5" />
-                  <span>Open Gmail Investigation</span>
-                </div>
+                  <h2 className="mt-5 text-lg font-black tracking-tight text-white">
+                    Connect your Gmail and find in a few seconds
+                  </h2>
+                  <p className="mt-2 text-[13px] leading-relaxed text-slate-400">
+                    Securely connect Gmail with read-only access and investigate real suspicious
+                    messages from your inbox — no copying, no exports, point and investigate.
+                  </p>
+
+                  <span className="btn-emergency mt-auto w-full pt-3 pb-3 text-xs">
+                    <InboxIcon className="h-4 w-4" />
+                    <span>Connect Gmail</span>
+                    <ArrowRight className="h-4 w-4 transition-transform group-hover:translate-x-1" />
+                  </span>
+                </button>
               </div>
-            </button>
-          </div>
+            </div>
 
-          <div className="text-[11px] text-slate-500 flex items-start gap-1.5 px-1">
-            <Info className="w-3.5 h-3.5 text-slate-500 shrink-0 mt-0.5" />
-            <span>
-              Both entry methods use Cyber Sakhi&apos;s single forensic analysis engine so results are identical regardless of how you get here.
-            </span>
+            <div className="mt-7 flex items-start justify-center gap-1.5 px-1 text-[11px] text-slate-500">
+              <Info className="mt-0.5 h-3.5 w-3.5 shrink-0 text-slate-500" />
+              <span>
+                Both entry methods use Cyber Sakhi&apos;s single forensic analysis engine, so results
+                are identical regardless of how you get here.
+              </span>
+            </div>
           </div>
         </>
-      )}
+      ) : showPasteMode ? (
+        <>
+          {/* CINEMATIC PASTE HERO — same forensic atmosphere as the landing screen */}
+          <section className="relative overflow-hidden pt-4 sm:pt-6">
+            <div aria-hidden className="pointer-events-none absolute inset-0 -z-10">
+              <div
+                className="absolute inset-0"
+                style={{
+                  backgroundImage:
+                    "linear-gradient(rgba(239,68,68,0.05) 1px, transparent 1px), linear-gradient(90deg, rgba(239,68,68,0.05) 1px, transparent 1px)",
+                  backgroundSize: "44px 44px",
+                  maskImage:
+                    "radial-gradient(ellipse 75% 70% at 50% 20%, black 30%, transparent 78%)",
+                  WebkitMaskImage:
+                    "radial-gradient(ellipse 75% 70% at 50% 20%, black 30%, transparent 78%)",
+                }}
+              />
+              <div
+                className="absolute left-1/2 -top-28 -translate-x-1/2 w-[560px] h-[340px] rounded-full"
+                style={{
+                  background:
+                    "radial-gradient(circle, rgba(185,28,28,0.24) 0%, rgba(185,28,28,0.06) 45%, transparent 70%)",
+                  filter: "blur(32px)",
+                }}
+              />
+            </div>
 
-      {/* Input Card (Method A - Paste Raw Email) */}
+            <div className="hero-scanline" aria-hidden />
+
+            <span
+              aria-hidden
+              className="pointer-events-none absolute left-3 top-3 h-7 w-7 rounded-tl-xl border-l-2 border-t-2 border-emergency-500/30"
+            />
+            <span
+              aria-hidden
+              className="pointer-events-none absolute right-3 top-3 h-7 w-7 rounded-tr-xl border-r-2 border-t-2 border-emergency-500/30"
+            />
+
+            <div className="relative z-10 mx-auto max-w-4xl px-4 pt-8 pb-2 text-left sm:pt-10">
+              <div
+                className={`transition-all duration-1000 ease-out ${
+                  mounted ? "opacity-100 translate-y-0" : "opacity-0 translate-y-6"
+                } motion-reduce:opacity-100 motion-reduce:translate-y-0`}
+                style={{ transitionDelay: "60ms" }}
+              >
+                <EyebrowBadge icon={FileText}>
+                  <span>Raw Evidence Input</span>
+                </EyebrowBadge>
+              </div>
+
+              <h1
+                className={`mt-5 transition-all duration-1000 ease-out ${
+                  mounted ? "opacity-100 translate-y-0" : "opacity-0 translate-y-6"
+                } motion-reduce:opacity-100 motion-reduce:translate-y-0`}
+                style={{ transitionDelay: "160ms" }}
+              >
+                <span className="tracking-tight text-white font-black text-4xl sm:text-5xl md:text-6xl">
+                  Paste <span className="text-crimson-gradient">Raw Email</span>
+                </span>
+              </h1>
+
+              <div
+                className={`transition-all duration-1000 ease-out ${
+                  mounted ? "opacity-100 translate-y-0" : "opacity-0 translate-y-6"
+                } motion-reduce:opacity-100 motion-reduce:translate-y-0`}
+                style={{ transitionDelay: "300ms" }}
+              >
+                <div className="mt-5 inline-flex items-center gap-2 rounded-full border border-emergency-500/25 bg-emergency-950/50 px-3 py-1 backdrop-blur-md">
+                  <span className="relative flex h-1.5 w-1.5">
+                    <span className="absolute inline-flex h-full w-full animate-ping rounded-full bg-emergency-400 opacity-75 motion-reduce:animate-none" />
+                    <span className="relative inline-flex h-1.5 w-1.5 rounded-full bg-emergency-500" />
+                  </span>
+                  <span className="text-[10px] font-bold uppercase tracking-[0.28em] text-emergency-200">
+                    Evidence Intake Ready
+                  </span>
+                </div>
+                <p className="mt-4 max-w-2xl text-sm font-light leading-relaxed tracking-wide text-slate-200 sm:text-base">
+                  Paste the full raw email source — headers and body — and run Cyber Sakhi&apos;s
+                  forensic engine on it. Supports Gmail, Outlook, Apple Mail, and ProtonMail exports.
+                </p>
+                <p className="mt-2 max-w-2xl text-xs leading-relaxed text-slate-400">
+                  Your input runs inside the Cyber Sakhi forensic pipeline and never leaves it.
+                </p>
+              </div>
+            </div>
+          </section>
+        </>
+      ) : result ? (
+        <>
+          {/* ================= FORENSIC REPORT HEADER ================= */}
+          <section className="relative overflow-hidden pt-2">
+            <div aria-hidden className="pointer-events-none absolute inset-0 -z-10">
+              <div
+                className="absolute inset-0"
+                style={{
+                  backgroundImage:
+                    "linear-gradient(rgba(239,68,68,0.04) 1px, transparent 1px), linear-gradient(90deg, rgba(239,68,68,0.04) 1px, transparent 1px)",
+                  backgroundSize: "44px 44px",
+                  maskImage:
+                    "radial-gradient(ellipse 80% 90% at 15% 0%, black 35%, transparent 80%)",
+                  WebkitMaskImage:
+                    "radial-gradient(ellipse 80% 90% at 15% 0%, black 35%, transparent 80%)",
+                }}
+              />
+            </div>
+
+            <div className="flex flex-col gap-6 sm:flex-row sm:items-start sm:justify-between">
+              <div className="min-w-0 space-y-3">
+                <div className="flex flex-wrap items-center gap-2">
+                  <EyebrowBadge icon={ShieldCheck}>
+                    <span>Forensic Analysis Complete</span>
+                  </EyebrowBadge>
+                  <span className="inline-flex items-center gap-1 rounded-full border border-slate-700 bg-slate-900/60 px-3 py-1 font-mono text-[10px] tracking-wider text-slate-400">
+                    <FolderOpen className="h-3 w-3 text-emergency-400" />
+                    ANALYSIS-ID {result.id || "N/A"}
+                  </span>
+                </div>
+
+                <h1 className="text-2xl font-black tracking-tight text-white sm:text-4xl">
+                  {result.headers.subject ? (
+                    <span className="break-words">{result.headers.subject}</span>
+                  ) : (
+                    "Email Forensic Report"
+                  )}
+                </h1>
+
+                <div className="flex flex-col gap-1.5 text-[11px] text-slate-400">
+                  <div className="flex flex-wrap items-center gap-x-2 gap-y-1 min-w-0">
+                    <span className="text-slate-500 font-semibold">FROM</span>
+                    <span className="font-mono text-slate-200 break-all">
+                      {result.headers.from || "N/A"}
+                    </span>
+                  </div>
+                  <div className="flex flex-wrap items-center gap-x-2 gap-y-1 min-w-0">
+                    <span className="text-slate-500 font-semibold">TO</span>
+                    <span className="font-mono text-slate-200 break-all">
+                      {result.headers.to || "N/A"}
+                    </span>
+                  </div>
+                  <div className="flex flex-wrap items-center gap-x-2 gap-y-1">
+                    <span className="text-slate-500 font-semibold">RECEIVED</span>
+                    <span className="font-mono text-slate-300">
+                      {result.headers.date
+                        ? new Date(result.headers.date).toLocaleString()
+                        : "N/A"}
+                    </span>
+                    <span className="text-slate-600">·</span>
+                    <span className="text-slate-500 font-semibold">ANALYZED</span>
+                    <span className="font-mono text-slate-300">
+                      {result.analyzedAt
+                        ? new Date(result.analyzedAt).toLocaleString()
+                        : "N/A"}
+                    </span>
+                  </div>
+                </div>
+              </div>
+
+              <button
+                type="button"
+                onClick={handleAnalyzeAnother}
+                className="btn-emergency shrink-0 self-start"
+              >
+                <RotateCcw className="h-4 w-4" />
+                <span>Analyze Another</span>
+              </button>
+            </div>
+          </section>
+        </>
+      ) : null}
+
+      {/* Input Panel (Method A - Paste Raw Email) */}
       {showPasteMode && (
-        <div className="p-6 rounded-2xl bg-slate-900/60 border border-slate-800 space-y-4">
-          <div className="flex items-center justify-between">
-            <h2 className="text-sm font-bold text-slate-200 flex items-center gap-2">
-              <FileText className="w-4 h-4 text-emergency-400" />
-              Paste Raw Email Source
-            </h2>
-            <button
-              type="button"
-              onClick={loadSample}
-              className="text-xs text-emergency-400 hover:text-emergency-300 underline font-medium"
-            >
-              Load phishing sample
-            </button>
-          </div>
+        <div className="rounded-2xl border border-slate-800/90 bg-[#0b0b17]/80 p-4 backdrop-blur-xl sm:p-6">
+          <form onSubmit={handleAnalyze} className="space-y-4">
+            <div className="flex flex-col gap-2 sm:flex-row sm:items-center sm:justify-between">
+              <div className="flex items-center gap-2.5">
+                <span className="font-mono text-[10px] font-bold uppercase tracking-[0.22em] text-emergency-400">
+                  Raw Email Source
+                </span>
+                <span
+                  aria-hidden
+                  className="hidden h-px w-16 bg-gradient-to-r from-emergency-500/60 to-transparent sm:inline-block"
+                />
+              </div>
+              <button
+                type="button"
+                onClick={loadSample}
+                className="text-xs font-medium text-emergency-400 underline underline-offset-4 transition-colors hover:text-emergency-300"
+              >
+                Load phishing sample
+              </button>
+            </div>
 
-          <p className="text-[11px] text-slate-500 -mt-2">
-            Include the full email — headers and body. Your input never leaves the Cyber Sakhi forensic pipeline.
-          </p>
+            <p className="text-[11px] leading-relaxed text-slate-500">
+              Include the full email — headers and body. The panel grows with your input, then
+              scrolls internally at its compact maximum.
+            </p>
 
-          <form onSubmit={handleAnalyze} className="space-y-3">
             <textarea
+              ref={textareaRef}
               value={rawEmail}
               onChange={(e) => setRawEmail(e.target.value)}
               placeholder={`Paste the full raw email source here (including headers).\n\nExample:\nReceived: from mail.sender.com ...\nFrom: noreply@sender.com\nSubject: Your account\n...`}
-              rows={14}
-              className="w-full rounded-xl bg-[#0a0a16] border border-slate-700/80 p-4 text-xs font-mono text-slate-200 placeholder:text-slate-600 focus:outline-none focus:border-emergency-500 resize-y"
+              rows={5}
+              spellCheck={false}
+              aria-label="Raw email source input"
+              className="w-full min-w-0 resize-none rounded-xl border border-slate-700/80 bg-[#0a0a16] p-4 text-xs font-mono leading-relaxed text-slate-200 placeholder:text-slate-600 transition-[height,border-color] duration-150 ease-out focus:border-emergency-500 focus:outline-none motion-reduce:transition-none"
             />
 
             {error && (
-              <div className="p-3 rounded-xl bg-red-950/80 border border-red-500/50 text-red-200 text-xs flex items-center gap-2">
-                <AlertCircle className="w-4 h-4 text-red-400 shrink-0" />
+              <div className="flex items-center gap-2 rounded-xl border border-red-500/50 bg-red-950/80 p-3 text-xs text-red-200">
+                <AlertCircle className="h-4 w-4 shrink-0 text-red-400" />
                 <span>{error}</span>
               </div>
             )}
@@ -654,16 +1100,16 @@ ${result.indicators.map(i => `• ${i.type}: ${i.value}${i.malicious ? " (SUSPIC
             <button
               type="submit"
               disabled={isAnalyzing || !rawEmail.trim()}
-              className="w-full sm:w-auto px-6 py-2.5 rounded-xl bg-emergency-600 hover:bg-emergency-500 disabled:opacity-50 text-white font-bold text-xs transition flex items-center justify-center gap-2 shadow-lg shadow-emergency-950/40"
+              className="btn-emergency mt-1 w-full sm:w-auto"
             >
               {isAnalyzing ? (
                 <>
-                  <Loader2 className="w-4 h-4 animate-spin" />
+                  <Loader2 className="h-4 w-4 animate-spin" />
                   <span>Analyzing...</span>
                 </>
               ) : (
                 <>
-                  <Search className="w-4 h-4" />
+                  <Search className="h-4 w-4" />
                   <span>Run Forensic Analysis</span>
                 </>
               )}
@@ -856,6 +1302,34 @@ ${result.indicators.map(i => `• ${i.type}: ${i.value}${i.malicious ? " (SUSPIC
                   </div>
                 </div>
               )}
+            </div>
+          )}
+
+          {/* ---- Forensic Findings (structured) ---- */}
+          {result.structuredFindings && result.structuredFindings.length > 0 && (
+            <div className="p-5 rounded-2xl bg-slate-900/60 border border-slate-800 space-y-4">
+              <SectionHeader
+                title={`Forensic Findings (${result.structuredFindings.length})`}
+                icon={FileSearch}
+              />
+
+              <FindingSummaryChips findings={result.structuredFindings} />
+
+              <p className="text-[11px] text-slate-500">
+                Investigation-oriented breakdown of every signal flagged by the forensic engine.
+                Severity, confidence, and evidence are reported exactly as produced by the analysis.
+              </p>
+
+              <div className="space-y-3">
+                {[...result.structuredFindings]
+                  .sort(
+                    (a, b) =>
+                      FINDING_SEVERITY_RANK[b.severity] - FINDING_SEVERITY_RANK[a.severity]
+                  )
+                  .map((finding, i) => (
+                    <FindingCard key={finding.id || i} finding={finding} />
+                  ))}
+              </div>
             </div>
           )}
 
@@ -1229,6 +1703,60 @@ ${result.indicators.map(i => `• ${i.type}: ${i.value}${i.malicious ? " (SUSPIC
             </div>
           )}
 
+          {/* ---- Content Language Analysis (NLP) ---- */}
+          {result.nlp && result.nlp.detail && result.nlp.detail.length > 0 && (
+            <div className="p-5 rounded-2xl bg-slate-900/60 border border-slate-800 space-y-4">
+              <SectionHeader title="Content Language Analysis" icon={Fingerprint} />
+
+              <div className="flex flex-wrap gap-1.5">
+                {result.nlp.categoriesDetected &&
+                  result.nlp.categoriesDetected.length > 0 &&
+                  result.nlp.categoriesDetected.map((cat) => (
+                    <span
+                      key={cat}
+                      className="text-[10px] px-2 py-1 rounded-lg bg-emergency-950 border border-emergency-700/40 text-emergency-300 font-bold uppercase tracking-wider"
+                    >
+                      {cat.replace(/_/g, " ")}
+                    </span>
+                  ))}
+                <span className="text-[10px] px-2 py-1 rounded-lg bg-slate-900 border border-slate-700 text-slate-400 font-mono">
+                  {result.nlp.triggerCount} trigger
+                  {result.nlp.triggerCount === 1 ? "" : "s"}
+                </span>
+              </div>
+
+              <div className="space-y-3">
+                {result.nlp.detail.map((trigger, i) => (
+                  <div
+                    key={i}
+                    className="p-3 rounded-xl bg-slate-950/70 border border-slate-800 space-y-2 min-w-0"
+                  >
+                    <div className="flex flex-wrap items-center justify-between gap-2">
+                      <span className="font-mono text-xs text-slate-200 break-all">
+                        &ldquo;{trigger.phrase}&rdquo;
+                      </span>
+                      <span className="text-[10px] uppercase font-bold px-2 py-0.5 rounded-md bg-slate-900 border border-slate-700 text-emerald-300">
+                        {trigger.category.replace(/_/g, " ")}
+                      </span>
+                    </div>
+                    {trigger.evidence && (
+                      <div className="text-[11px] text-slate-400 break-words">
+                        {trigger.evidence}
+                      </div>
+                    )}
+                  </div>
+                ))}
+              </div>
+
+              {result.nlp.disclaimer && (
+                <div className="flex items-start gap-2 text-[10px] text-slate-500">
+                  <Info className="w-3.5 h-3.5 shrink-0 mt-0.5" />
+                  <span className="break-words">{result.nlp.disclaimer}</span>
+                </div>
+              )}
+            </div>
+          )}
+
                     {/* ---- Threat / Indicator Correlation ---- */}
           {result.indicatorCorrelations && result.indicatorCorrelations.length > 0 && (
             <div className="p-5 rounded-2xl bg-slate-900/60 border border-slate-800 space-y-4">
@@ -1286,6 +1814,66 @@ ${result.indicators.map(i => `• ${i.type}: ${i.value}${i.malicious ? " (SUSPIC
                     </div>
                   );
                 })}
+              </div>
+            </div>
+          )}
+
+          {/* ---- Embedded Link Analysis ---- */}
+          {result.urlRisk && result.urlRisk.length > 0 && (
+            <div className="p-5 rounded-2xl bg-slate-900/60 border border-slate-800 space-y-4">
+              <SectionHeader
+                title={`Embedded Link Analysis (${result.urlRisk.length})`}
+                icon={ExternalLink}
+              />
+
+              <p className="text-[11px] text-slate-500">
+                Structure-and-pattern review of links found in the email. Links are never followed,
+                fetched, or opened.
+              </p>
+
+              <div className="space-y-3">
+                {result.urlRisk.map((url, i) => (
+                  <div
+                    key={i}
+                    className="p-3 rounded-xl bg-slate-950/70 border border-slate-800 space-y-2 min-w-0"
+                  >
+                    <div className="flex flex-col gap-2 sm:flex-row sm:items-center sm:justify-between">
+                      <span className="font-mono text-xs text-slate-200 break-all min-w-0">
+                        {url.url}
+                      </span>
+                      <span
+                        className={`text-[10px] font-bold uppercase px-2 py-0.5 rounded-md border shrink-0 ${
+                          url.severity === "HIGH"
+                            ? "bg-red-950 border-red-600/50 text-red-300"
+                            : url.severity === "MEDIUM"
+                            ? "bg-amber-950 border-amber-600/50 text-amber-300"
+                            : "bg-sky-950 border-sky-600/50 text-sky-300"
+                        }`}
+                      >
+                        {url.severity}
+                      </span>
+                    </div>
+
+                    {url.evidence && (
+                      <div className="text-[11px] text-slate-400 break-words">
+                        {url.evidence}
+                      </div>
+                    )}
+
+                    {url.flags && url.flags.length > 0 && (
+                      <div className="flex flex-wrap gap-1.5">
+                        {url.flags.map((flag, fi) => (
+                          <span
+                            key={fi}
+                            className="text-[9px] font-mono uppercase tracking-wider px-2 py-0.5 rounded bg-slate-900 border border-slate-700 text-slate-400"
+                          >
+                            {flag}
+                          </span>
+                        ))}
+                      </div>
+                    )}
+                  </div>
+                ))}
               </div>
             </div>
           )}
@@ -1403,6 +1991,38 @@ ${result.indicators.map(i => `• ${i.type}: ${i.value}${i.malicious ? " (SUSPIC
               {result.headers.rawHeaders || "No raw headers available."}
             </div>
           </details>
+
+          {/* ---- Case Actions ---- */}
+          <div className="flex flex-col gap-3 sm:flex-row sm:items-center sm:justify-between rounded-2xl border border-slate-800 bg-slate-900/60 p-4">
+            <div className="text-[11px] text-slate-500 min-w-0">
+              Investigation{" "}
+              {result.id && <span className="font-mono text-slate-400">{result.id}</span>}
+              {" · "}Threat level{" "}
+              <span className={`font-black ${threatColorMap[result.threatLevel]}`}>
+                {result.threatLevel}
+              </span>
+              {" · "}Score {result.threatScore}/100
+            </div>
+            <div className="flex flex-wrap gap-2">
+              {caseLink && (
+                <Link
+                  href={`/cases/${caseLink.id}`}
+                  className="btn-emergency text-xs"
+                >
+                  <FolderOpen className="h-3.5 w-3.5" />
+                  Open Case
+                </Link>
+              )}
+              <button
+                type="button"
+                onClick={handleAnalyzeAnother}
+                className="btn-emergency text-xs"
+              >
+                <RotateCcw className="h-3.5 w-3.5" />
+                Analyze Another Email
+              </button>
+            </div>
+          </div>
         </div>
       )}
     </div>

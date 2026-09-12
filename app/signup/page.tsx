@@ -62,6 +62,8 @@ function SignupForm() {
   const [googleSignupInFlight, setGoogleSignupInFlight] = useState(false);
   const [redirecting, setRedirecting] = useState(false);
   const [showGeneratedPw, setShowGeneratedPw] = useState(false);
+  const [onetimePending, setOnetimePending] = useState(false);
+  const [onetimeError, setOnetimeError] = useState<string | null>(null);
 
   // Latch that persists across StrictMode remounts so the Google-signup
   // discovery request is fired at most once per page session.
@@ -133,26 +135,49 @@ function SignupForm() {
 
   useEffect(() => {
     const token = searchParams.get("onetime");
-    if (token && !success) {
-      (async () => {
-        try {
-          const res = await fetch(`/api/auth/onetime?token=${encodeURIComponent(token)}`);
-          if (res.ok) {
-            const data = await res.json();
-            if (data && data.sakhiNumber && data.generatedPassword) {
-              setSuccess({
-                sakhiNumber: data.sakhiNumber,
-                name: data.name || "Sakhi User",
-                email: data.email || "",
-                password: data.generatedPassword,
-              });
-            }
-          }
-        } catch {
-          /* silently ignore */
+    if (!token || success) return;
+
+    let cancelled = false;
+    setOnetimePending(true);
+    setOnetimeError(null);
+
+    (async () => {
+      try {
+        const res = await fetch(`/api/auth/onetime?token=${encodeURIComponent(token)}`);
+        const data = await res.json().catch(() => ({}));
+        if (cancelled) return;
+
+        if (!res.ok || !data.sakhiNumber || !data.generatedPassword) {
+          // Safe failure: missing / invalid / expired / already-consumed
+          // token. Surface an explicit error instead of silently falling
+          // back to another signup/login state, and never show partial
+          // credentials.
+          setOnetimeError(
+            data?.error ||
+              "This signup link is invalid or has expired. Please sign up again to receive your Sakhi Number."
+          );
+          return;
         }
-      })();
-    }
+
+        setSuccess({
+          sakhiNumber: data.sakhiNumber,
+          name: data.name || "Sakhi User",
+          email: data.email || "",
+          password: data.generatedPassword,
+        });
+      } catch {
+        if (cancelled) return;
+        setOnetimeError(
+          "Could not retrieve your credentials. Please try signing up again."
+        );
+      } finally {
+        if (!cancelled) setOnetimePending(false);
+      }
+    })();
+
+    return () => {
+      cancelled = true;
+    };
   }, [searchParams, success]);
 
   useEffect(() => {
@@ -261,6 +286,16 @@ function SignupForm() {
       const data = await res.json();
 
       if (data?.token) {
+        // Force a server-side session refresh BEFORE showing the credentials
+        // popup: the next /api/auth/session read re-runs the NextAuth jwt
+        // callback, which re-attaches the session to the freshly created
+        // Cyber Sakhi profile (profile UUID + Sakhi Number). This closes the
+        // Google-UID window so the browser never keeps a stale identity.
+        try {
+          await getSession();
+        } catch {
+          /* best-effort — Continue still signs in with credentials */
+        }
         window.location.href = `/signup?onetime=${encodeURIComponent(data.token)}`;
         return;
       }
@@ -711,6 +746,80 @@ function SignupForm() {
             >
               ← Go to Login page instead
             </Link>
+          </div>
+        </div>
+      </div>
+    );
+  }
+
+  // =========================
+  // ONE-TIME CREDENTIALS FLOW (PRIORITY)
+  // =========================
+  // While /signup?onetime=<token> is present, the credential hand-off MUST
+  // take priority over the generic "already logged in" state: the popup has
+  // to appear reliably, and an invalid/expired/consumed token must surface a
+  // safe error instead of silently falling back to another auth screen.
+  const onetimeToken = searchParams.get("onetime");
+  if (onetimeToken && !success) {
+    return (
+      <div className="min-h-screen w-full relative flex items-center justify-center px-4 sm:px-6 py-10 overflow-hidden">
+        <div
+          className="absolute inset-0 pointer-events-none"
+          style={{
+            background:
+              "radial-gradient(ellipse 55% 45% at 15% 10%, rgba(220, 38, 38, 0.28), transparent 65%), radial-gradient(ellipse 55% 45% at 85% 90%, rgba(127, 29, 29, 0.35), transparent 65%), linear-gradient(180deg, #05050a 0%, #0a0a18 100%)",
+          }}
+        />
+        <div
+          className="absolute inset-0 opacity-[0.06] mix-blend-overlay pointer-events-none"
+          style={{
+            backgroundImage:
+              "repeating-linear-gradient(0deg, transparent 0 2px, rgba(255,255,255,0.08) 2px 3px)",
+          }}
+        />
+
+        <div className="relative z-10 w-full max-w-md space-y-6 animate-fade-in-up">
+          <div className="text-center space-y-3">
+            <h1 className="text-2xl sm:text-3xl font-black tracking-tight">
+              {onetimeError ? (
+                <span className="text-white">Signup link expired</span>
+              ) : (
+                <span className="text-white">
+                  Preparing your <span className="text-crimson-gradient">Sakhi Number</span>
+                </span>
+              )}
+            </h1>
+            {onetimeError ? (
+              <div className="space-y-4">
+                <div className="p-4 rounded-xl bg-red-950/80 border border-red-500/50 text-red-200 text-xs flex items-start gap-2.5 text-left animate-fade-in-up">
+                  <AlertCircle className="w-4 h-4 text-red-400 shrink-0 mt-0.5" />
+                  <div>
+                    <div className="font-bold text-white mb-1">Credential retrieval failed</div>
+                    <div className="text-red-200/90 leading-relaxed">{onetimeError}</div>
+                  </div>
+                </div>
+                <Link
+                  href="/signup"
+                  className="w-full py-4 rounded-xl text-white font-bold tracking-wide text-sm transition flex items-center justify-center gap-2"
+                  style={{
+                    background:
+                      "linear-gradient(135deg, #b91c1c 0%, #ef4444 50%, #dc2626 100%)",
+                    boxShadow:
+                      "0 18px 45px -12px rgba(220, 38, 38, 0.75), inset 0 1px 0 rgba(255,255,255,0.18)",
+                    clipPath:
+                      "polygon(0 0, 100% 0, 100% calc(100% - 9px), calc(100% - 9px) 100%, 0 100%)",
+                  }}
+                >
+                  Sign Up Again
+                  <ArrowRight className="w-4 h-4" />
+                </Link>
+              </div>
+            ) : (
+              <div className="flex items-center justify-center gap-2.5 text-slate-300 text-xs font-semibold">
+                <span className="w-4 h-4 border-2 border-white/25 border-t-white rounded-full animate-spin" />
+                Retrieving your one-time credentials...
+              </div>
+            )}
           </div>
         </div>
       </div>

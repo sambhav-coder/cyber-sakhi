@@ -32,6 +32,11 @@ function LoginForm() {
   const [successBanner, setSuccessBanner] = useState<string | null>(
     registered ? "Account created successfully! Please sign in." : null
   );
+  const [noticeBanner, setNoticeBanner] = useState<string | null>(
+    searchParams.get("google") === "exists"
+      ? "This Google account is already registered. Please log in with your Sakhi Number and password."
+      : null
+  );
   const [sakhiCopied, setSakhiCopied] = useState(false);
 
   const handleCredentialsLogin = async (e: React.FormEvent) => {
@@ -41,6 +46,7 @@ function LoginForm() {
     setIsLoading(true);
     setErrorMessage(null);
     setSuccessBanner(null);
+    setNoticeBanner(null);
 
     try {
       const res = await signIn("credentials", {
@@ -147,6 +153,14 @@ function LoginForm() {
             <div className="p-3.5 rounded-xl bg-emerald-950/80 border border-emerald-500/40 text-emerald-200 text-xs flex items-center gap-2 animate-fade-in-up">
               <Check className="w-4 h-4 text-emerald-400 shrink-0" />
               <span>{successBanner}</span>
+            </div>
+          )}
+
+          {/* Notice Banner (google=exists — existing Google account redirected here) */}
+          {noticeBanner && (
+            <div className="p-3.5 rounded-xl bg-amber-950/80 border border-amber-500/40 text-amber-200 text-xs flex items-center gap-2 animate-fade-in-up">
+              <AlertCircle className="w-4 h-4 text-amber-400 shrink-0" />
+              <span>{noticeBanner}</span>
             </div>
           )}
 
