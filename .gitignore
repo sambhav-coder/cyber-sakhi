@@ -1,0 +1,11 @@
+node_modules
+.env.local
+.env*.local
+.next/
+*.tsbuildinfo
+
+.trae/
+.claude/
+
+# Local Sakhi Network store (fingerprints only, still never commit)
+.data/
