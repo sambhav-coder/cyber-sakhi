@@ -2,6 +2,7 @@ import { NextResponse } from "next/server";
 import { getServerSession } from "next-auth";
 import { authOptions } from "@/lib/authOptions";
 import { getSttSlotStatus, getTtsSlotStatus } from "@/lib/voice/serverConfig";
+import { localSttAvailable, localTtsAvailable } from "@/lib/voice/localPiper";
 
 /**
  * GET /api/voice/status — authenticates and reports honest voice capability.
@@ -18,6 +19,10 @@ export async function GET() {
     const tts = getTtsSlotStatus();
 
     return NextResponse.json({
+      local: {
+        tts: localTtsAvailable(),
+        stt: localSttAvailable(),
+      },
       stt: {
         provider: stt.provider,
         available: stt.available,

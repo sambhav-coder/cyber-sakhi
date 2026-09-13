@@ -9,3 +9,10 @@ node_modules
 
 # Local Sakhi Network store (fingerprints only, still never commit)
 .data/
+
+# Local AI voice/STT/TTS models
+models/
+
+build.log
+dev-server.log
+dev-server-qlock.out.log

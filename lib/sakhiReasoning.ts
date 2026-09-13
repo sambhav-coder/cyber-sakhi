@@ -1,24 +1,23 @@
 import type { ChatMessage, ChatContextFragment, SakhiLanguage } from "./sakhiAI";
-import { generateSakhiResponse } from "./sakhiAI";
-import { generateCaseAwareResponse } from "./sakhiAICase";
+import { generateGeminiReply } from "./ai/gemini";
+import type { GeminiImageInput, GeminiReplySpec } from "./ai/gemini";
+import { describeGeminiProvider } from "./ai/gemini";
 
 /**
- * Sakhi Reasoning Provider Architecture
+ * Sakhi Reasoning Provider Architecture (Master Correction)
  *
- * Honest layering — no fake AI:
+ * ONE real brain: Chat and Voice both resolve through this seam, and the only
+ * conversational answers it produces come from Gemini.
  *
- * 1. DETERMINISTIC / HEURISTIC (ACTIVE): Sakhi's safety reasoning is generated
- *    by explicit, auditable heuristics (case crosswalks, escalation decisions,
- *    evidence-backed explainability). Always available; zero hallucination.
+ * If Gemini is not configured or a call fails, this layer NEVER substitutes a
+ * canned/heuristic answer. It throws `SakhiAIUnavailableError`, which the chat
+ * API converts into a truthful "AI service unavailable" message with Retry.
  *
- * 2. LLM ADAPTER (PROVIDER-READY / UNAVAILABLE): a real LLM backend could be
- *    plugged behind the same `reason()` seam when the platform owner adds an
- *    API key + endpoint. Until a genuine backend is connected it reports
- *    "unavailable" and the deterministic provider is used — Sakhi never fakes
- *    having an LLM.
+ * Deterministic logic is still used only for routing, safety controls,
+ * authorization, validation, classification and formatting — never to fabricate
+ * a conversational reply.
  */
-
-export type SakhiReasoningKind = "heuristic-crosswalk" | "llm-adapter";
+export type SakhiReasoningKind = "heuristic-crosswalk" | "llm-adapter" | "gemini";
 
 export interface SakhiReasoningProvider {
   key: string;
@@ -32,10 +31,21 @@ export const DETERMINISTIC_REASONING_PROVIDER: SakhiReasoningProvider = {
   key: "heuristic-crosswalk",
   label: "Deterministic Safety Reasoning (heuristic crosswalk)",
   kind: "heuristic-crosswalk",
-  status: "active",
+  status: "unavailable",
   note:
-    "Answers are derived from auditable rules over case facts — explainable and hallucination-free.",
+    "Rule-based routing/classification only. It is never used to fabricate conversational answers.",
 };
+
+function geminiProvider(): SakhiReasoningProvider {
+  const g = describeGeminiProvider();
+  return {
+    key: g.key,
+    label: g.label,
+    kind: "gemini",
+    status: g.status,
+    note: g.note,
+  };
+}
 
 function llmProvider(): SakhiReasoningProvider {
   const key = process.env.SAKHI_LLM_API_KEY?.trim();
@@ -47,7 +57,7 @@ function llmProvider(): SakhiReasoningProvider {
       kind: "llm-adapter",
       status: "unavailable",
       note:
-        "An LLM adapter is configured but no live backend responded during verification. Deterministic reasoning remains active.",
+        "An LLM adapter is configured but deprecated. Sakhi uses Gemini for conversational answers.",
     };
   }
   return {
@@ -55,26 +65,26 @@ function llmProvider(): SakhiReasoningProvider {
     label: "LLM Reasoning Adapter",
     kind: "llm-adapter",
     status: "unavailable",
-    note:
-      "Set SAKHI_REASONING_PROVIDER=llm plus a verified LLM endpoint to enable. Not active — answers are never faked as AI.",
+    note: "Deprecated legacy adapter — not used.",
   };
 }
 
+/** The provider reported for the NEXT reply. Only Gemini can answer conversationally. */
 export function getSakhiReasoningProvider(): SakhiReasoningProvider {
-  return DETERMINISTIC_REASONING_PROVIDER;
+  return geminiProvider();
 }
 
-/**
- * Single reasoning seam used by the chat route. Today it always routes to the
- * deterministic provider; swapping in a real LLM backend only changes where
- * `reasonForCase` / `reasonGeneral` delegate.
- */
-export interface ReasoningRequest {
-  caseId?: string;
-  caseNumber?: string;
-  userQuery: string;
-  language: SakhiLanguage;
-  context: Record<string, unknown>;
+export function listSakhiReasoningProviders(): SakhiReasoningProvider[] {
+  return [geminiProvider(), DETERMINISTIC_REASONING_PROVIDER, llmProvider()];
+}
+
+export class SakhiAIUnavailableError extends Error {
+  retryable: boolean;
+  constructor(message: string, retryable = true) {
+    super(message);
+    this.name = "SakhiAIUnavailableError";
+    this.retryable = retryable;
+  }
 }
 
 export interface ReasoningResult {
@@ -83,31 +93,86 @@ export interface ReasoningResult {
   providerLabel: string;
 }
 
-export function reasonGeneral(input: {
-  userQuery: string;
-  language: SakhiLanguage;
-  context?: ChatContextFragment;
-}): ReasoningResult {
-  const provider = getSakhiReasoningProvider();
-  const reply = generateSakhiResponse(input.userQuery, input.language, input.context);
+function nowLabel(): string {
+  return new Date().toLocaleTimeString([], {
+    hour: "2-digit",
+    minute: "2-digit",
+  });
+}
+
+function toChatMessage(spec: GeminiReplySpec): ChatMessage {
   return {
-    reply,
-    providerKey: provider.key,
-    providerLabel: provider.label,
+    id: "sakhi_gemini_" + Date.now() + "_" + Math.floor(Math.random() * 1000),
+    sender: "sakhi",
+    text: spec.text,
+    timestamp: nowLabel(),
+    category:
+      spec.category === "emergency" ||
+      spec.category === "legal" ||
+      spec.category === "evidence" ||
+      spec.category === "emotional" ||
+      spec.category === "scam" ||
+      spec.category === "education"
+        ? spec.category
+        : "general",
+    quickActions:
+      spec.quickActions && spec.quickActions.length > 0
+        ? spec.quickActions
+        : undefined,
   };
 }
 
-export function reasonForCase(
+async function geminiOrThrow(input: {
+  userQuery: string;
+  language: SakhiLanguage;
+  context?: ChatContextFragment;
+  caseContext?: Record<string, unknown>;
+  images?: GeminiImageInput[];
+}): Promise<ReasoningResult> {
+  const provider = geminiProvider();
+  if (provider.status !== "active") {
+    throw new SakhiAIUnavailableError(
+      "Sakhi couldn't reach her AI service right now. Please try again.",
+      true
+    );
+  }
+  try {
+    const spec = await generateGeminiReply({
+      userQuery: input.userQuery,
+      language: input.language,
+      context: input.context,
+      caseContext: input.caseContext,
+      images: input.images,
+    });
+    return {
+      reply: toChatMessage(spec),
+      providerKey: provider.key,
+      providerLabel: provider.label,
+    };
+  } catch (error) {
+    console.warn("[sakhiReasoning] Gemini call failed:", error instanceof Error ? error.message : String(error));
+    throw new SakhiAIUnavailableError(
+      "Sakhi couldn't reach her AI service right now. Please try again.",
+      true
+    );
+  }
+}
+
+export async function reasonGeneral(input: {
+  userQuery: string;
+  language: SakhiLanguage;
+  context?: ChatContextFragment;
+  images?: GeminiImageInput[];
+}): Promise<ReasoningResult> {
+  return geminiOrThrow(input);
+}
+
+export async function reasonForCase(
   caseId: string,
   userQuery: string,
-  language: "en" | "hi",
-  context: Record<string, unknown>
-): ReasoningResult {
-  const provider = getSakhiReasoningProvider();
-  const reply = generateCaseAwareResponse(userQuery, language, context as any);
-  return {
-    reply,
-    providerKey: provider.key,
-    providerLabel: provider.label,
-  };
+  language: SakhiLanguage,
+  context: Record<string, unknown>,
+  images?: GeminiImageInput[]
+): Promise<ReasoningResult> {
+  return geminiOrThrow({ userQuery, language, caseContext: context, images });
 }

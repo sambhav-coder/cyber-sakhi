@@ -48,10 +48,10 @@ const mainNavLinks: NavLink[] = [
     primary: true,
   },
   {
-    href: "/companion",
+    href: "/sakhi",
     label: "Sakhi AI",
     icon: MessageSquare,
-    description: "AI safety companion",
+    description: "Chat or talk to Sakhi",
     badge: "AI",
   },
   {

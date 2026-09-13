@@ -34,6 +34,8 @@ export interface ChatContextFragment {
   attachmentSummaries?: string[];
   /** Human-readable briefs of attached evidence (code + metadata, never content). */
   evidenceBriefs?: string[];
+  /** Human-readable briefs of attached forensic reports / case reports. */
+  reportBriefs?: string[];
   /** Non-sensitive long-term memory rows, as "key: value". */
   memory?: { key: string; value: string }[];
 }
@@ -66,15 +68,64 @@ export interface IncidentAnalysis {
 }
 
 const DEVANAGARI = /[\u0900-\u097F]/;
-const HINGLISH_MARKERS = /\b(mujhe|maine|tumhe|aapko|kaise|kya|hai|karo|karna|karein|batao|nahi|nhi|kyu|kyun|sakta|sakti|ho sakta|samajh|problem|mera|meri|tera|teri|madad|kar raha|kar rahi|didi|bhaiya|please|sir|bhoot|scam hua|hacked hua|otp bola|paise|paisa)\b/i;
 
-/** English / Hindi / Hinglish detection (Devanagari -> Hindi, roman Hinglish markers -> hinglish). */
+/**
+ * Layered per-message language detector (NO Gemini and NO session lock).
+ *
+ * Priority (the current message decides; earlier turns are never a hard lock):
+ *   1. Script  — Devanagari strongly implies Hindi.
+ *   2. English small-talk — short common English phrases (Hi / Hello / I am
+ *      good / How are you? / Okay …) are ALWAYS English, even right after a
+ *      Hindi/Hinglish turn.
+ *   3. Lexical — distinctive Hindi-roman / Hinglish vocabulary → Hinglish.
+ *   4. Fallback — anything left over with Latin script is English.
+ */
+const ENGLISH_SMALLTALK = [
+  /^(hi|hii+|hello|hey+|hola)$/,
+  /^(good\s+(morning|afternoon|evening|night))$/,
+  /^(thanks|thank\s*you|thx|ty)$/,
+  /^(okay|ok|okayy|kk|fine|sure|yes|no|yeah|yep|nope)$/,
+  /^(i\s+am\s+good|i'?m\s+good|im\s+good|i\s+am\s+fine|i'?m\s+fine|doing\s+great|not\s+bad|all\s+good)$/,
+  /^(how\s+are\s+you|how\s+r\s+u|how\s+are\s+you\s+doing|what'?s\s+up|whats\s+up|what\s+is\s+up|how\s+is\s+it\s+going)$/,
+  /^(what\s+can\s+you\s+do|who\s+are\s+you|are\s+you\s+there|can\s+you\s+hear\s+me)$/,
+  /^(bye|good\s+bye|see\s+you|see\s+ya|see\s+you\s+soon|take\s+care)$/,
+  /^(got\s+it|okay\s+got\s+it|understood|makes\s+sense|cool|lol|haha)$/,
+];
+
+const HINGLISH_MARKERS = /\b(main|mera|meri|tera|teri|mujhe|mujh|tumhe|tum|aap|aapka|kya|kaise|kyu|kyun|hai|hoon|hain|nahi|nhi|batao|bata|bataye|samajh|samaajh|karna|karo|karein|karun|karta|karti|chahiye|theek|paisa|paise|madad|bhai|didi|bhaiya|sakta|sakti|sakte|hota|hote|raha|rahi|jaana|aana|likho|bolo|suno|ho\s+raha|ho\s+rahi|aa\s+raha|aa\s+rahi)\b/i;
+
+function normalizeForLanguage(text: string): string {
+  return text
+    .toLowerCase()
+    .replace(/[’‘’]/g, "'")
+    .replace(/[.,!?;:]/g, " ")
+    .replace(/\s+/g, " ")
+    .trim();
+}
+
+/** If the user explicitly asks for a language ("tell me in Hindi"), that wins. */
+export function explicitLanguageRequest(text: string): SakhiLanguage | null {
+  const s = text.toLowerCase().trim();
+  const mention =
+    /(?:in|mein|में|\bto\b|translate|convert|hindi|hinglish)\b.{0,40}/i;
+  if (/हिंदी|हिन्दी|हिंलीश/.test(s)) return "hi";
+  if (/(?:in|mein|में)\s+hinglish|hinglish\s+(?:mein|में)|speak\s+hinglish/i.test(s)) return "hinglish";
+  if (/(?:in|mein|में)\s+hindi|hindi\s+(?:mein|में)|translate\s+.*\bto\s+hindi|tell\s+.*\bin\s+hindi|reply\s+.*\bin\s+hindi|answer\s+.*\bin\s+hindi|batao\s+hindi|hindhi/i.test(s)) return "hi";
+  return null;
+}
+
+/** English / Hindi / Hinglish detection for the CURRENT message (never foreign-keyed to earlier turns). */
 export function detectLanguage(text: string): SakhiLanguage {
   const sample = text.trim();
   if (!sample) return "en";
   if (DEVANAGARI.test(sample)) return "hi";
-  const matches = sample.toLowerCase().match(HINGLISH_MARKERS);
-  if (matches && matches.length >= 2) return "hinglish";
+
+  const s = normalizeForLanguage(sample);
+  for (const phrase of ENGLISH_SMALLTALK) {
+    if (phrase.test(s)) return "en";
+  }
+  const markers = s.match(HINGLISH_MARKERS);
+  if (markers && markers.length > 0) return "hinglish";
   return "en";
 }
 

@@ -36,7 +36,7 @@ export interface DevPersona {
 export const DEV_PERSONAS: DevPersona[] = [
   {
     key: "user",
-    id: "dev_user_bypass",
+    id: "10000000-0000-4000-8000-000000000001",
     name: "Ananya Sharma",
     email: "user@cybersakhi.org",
     role: "USER",
@@ -45,7 +45,7 @@ export const DEV_PERSONAS: DevPersona[] = [
   },
   {
     key: "admin",
-    id: "dev_admin_bypass",
+    id: "10000000-0000-4000-8000-000000000002",
     name: "Cyber Sakhi Safety Admin",
     email: "admin@cybersakhi.org",
     role: "ADMIN",

@@ -233,3 +233,133 @@ export async function listSakhiMemory(
   throwIfError(error, "Failed to list memory.");
   return (data || []) as SakhiMemoryRow[];
 }
+
+export async function deleteSakhiMemory(
+  ownerId: string,
+  key: string
+): Promise<boolean> {
+  const { error } = await getSupabaseServer()
+    .from("sakhi_memory")
+    .delete()
+    .eq("owner_id", ownerId)
+    .eq("key", key);
+  if (error) return false;
+  return true;
+}
+
+/** Server-internal lookup by key (owner resolved from the stored row). */
+export async function getSakhiMemoryByKey(
+  key: string
+): Promise<SakhiMemoryRow | null> {
+  const { data, error } = await getSupabaseServer()
+    .from("sakhi_memory")
+    .select(MEMORY_COLS)
+    .eq("key", key)
+    .maybeSingle();
+  if (error && error.code === "PGRST116") return null;
+  throwIfError(error, "Failed to retrieve memory.");
+  return data as SakhiMemoryRow | null;
+}
+
+// ---------------------------------------------------------------------------
+// Conversation pinning + controlled sharing (no schema migration required;
+// state lives in the owner-scoped sakhi_memory table).
+// ---------------------------------------------------------------------------
+
+const PIN_PREFIX = "convo.pinned.";
+const SHARE_PREFIX = "convo.share.";
+
+export async function setConversationPinned(
+  ownerId: string,
+  conversationId: string,
+  pinned: boolean
+): Promise<boolean> {
+  const key = PIN_PREFIX + conversationId;
+  if (pinned) {
+    await saveSakhiMemory({
+      ownerId,
+      key,
+      value: "1",
+      kind: "preference",
+      sensitive: false,
+    });
+    return true;
+  }
+  return deleteSakhiMemory(ownerId, key);
+}
+
+export async function listConversationPins(
+  ownerId: string
+): Promise<Record<string, boolean>> {
+  const rows = await listSakhiMemory(ownerId);
+  const out: Record<string, boolean> = {};
+  for (const row of rows) {
+    if (row.key.startsWith(PIN_PREFIX)) {
+      out[row.key.slice(PIN_PREFIX.length)] = row.value === "1";
+    }
+  }
+  return out;
+}
+
+export async function createConversationShare(input: {
+  ownerId: string;
+  conversationId: string;
+  token: string;
+  expiresAt: string;
+}): Promise<boolean> {
+  await saveSakhiMemory({
+    ownerId: input.ownerId,
+    key: SHARE_PREFIX + input.token,
+    value: JSON.stringify({
+      conversationId: input.conversationId,
+      expiresAt: input.expiresAt,
+    }),
+    kind: "share",
+    sensitive: true,
+  });
+  return true;
+}
+
+/** Resolve a share token to (ownerId, conversationId, expiresAt). */
+export async function resolveConversationShare(
+  token: string
+): Promise<{
+  ownerId: string;
+  conversationId: string;
+  expiresAt: string;
+} | null> {
+  const row = await getSakhiMemoryByKey(SHARE_PREFIX + token);
+  if (!row) return null;
+  try {
+    const parsed = JSON.parse(row.value || "{}") as {
+      conversationId?: string;
+      expiresAt?: string;
+    };
+    if (!parsed.conversationId || !parsed.expiresAt) return null;
+    return {
+      ownerId: row.owner_id,
+      conversationId: parsed.conversationId,
+      expiresAt: parsed.expiresAt,
+    };
+  } catch {
+    return null;
+  }
+}
+
+export async function revokeConversationShares(
+  ownerId: string,
+  conversationId: string
+): Promise<boolean> {
+  const rows = await listSakhiMemory(ownerId, { includeSensitive: true });
+  let ok = true;
+  for (const row of rows) {
+    if (!row.key.startsWith(SHARE_PREFIX)) continue;
+    try {
+      const parsed = JSON.parse(row.value || "{}") as { conversationId?: string };
+      if (parsed.conversationId === conversationId) {
+        if (!(await deleteSakhiMemory(ownerId, row.key))) ok = false;
+      }
+    } catch { /* skip malformed */ }
+  }
+  return ok;
+}

@@ -150,21 +150,6 @@
 .delay-900  { animation-delay: 900ms;  }
 .delay-1000 { animation-delay: 1000ms; }
 
-/* Rising embers behind the Sakhi presence */
-.sakhi-ember {
-  position: absolute;
-  border-radius: 9999px;
-  background: radial-gradient(circle, rgba(252, 165, 165, 0.95) 0%, rgba(239, 68, 68, 0.55) 45%, rgba(239, 68, 68, 0) 75%);
-  box-shadow: 0 0 8px 1px rgba(239, 68, 68, 0.55);
-  animation: sakhiEmberRise linear infinite;
-}
-@keyframes sakhiEmberRise {
-  0%    { transform: translateY(0) translateX(0) scale(0.7); opacity: 0; }
-  12%   { opacity: 1; }
-  60%   { opacity: 0.75; }
-  100%  { transform: translateY(-150px) translateX(14px) scale(1.15); opacity: 0; }
-}
-
 /* Sakhi voice waveform bars */
 .sakhi-wave {
   animation: sakhiWave 1.1s ease-in-out infinite;
@@ -172,6 +157,23 @@
 @keyframes sakhiWave {
   0%, 100% { transform: scaleY(0.45); opacity: 0.6; }
   50%      { transform: scaleY(1); opacity: 1; }
+}
+
+/* Blinking reveal caret for Sakhi's intro text */
+.sakhi-caret {
+  animation: sakhiCaret 0.9s steps(2, start) infinite;
+}
+@keyframes sakhiCaret {
+  to {
+    visibility: hidden;
+  }
+}
+
+@media (prefers-reduced-motion: reduce) {
+  .sakhi-wave,
+  .sakhi-caret {
+    animation: none;
+  }
 }
 
 /* Email Forensics live scan sweep */
@@ -202,5 +204,174 @@
   .hero-scanline {
     animation: none;
     opacity: 0;
+  }
+}
+
+/* Sakhi portrait halo — gentle breathing while speaking */
+.sakhi-halo-breath {
+  animation: sakhiHaloBreath 3.8s ease-in-out infinite;
+}
+@keyframes sakhiHaloBreath {
+  0%, 100% { transform: scale(0.985); opacity: 0.92; }
+  50%      { transform: scale(1.025); opacity: 1; }
+}
+
+/* Presence rings around Sakhi when she speaks */
+.sakhi-presence-ring-1 {
+  animation: sakhiPresenceRing 2.6s cubic-bezier(0.2, 0.8, 0.2, 1) infinite;
+}
+.sakhi-presence-ring-2 {
+  animation: sakhiPresenceRing 2.6s cubic-bezier(0.2, 0.8, 0.2, 1) infinite;
+  animation-delay: 1.3s;
+}
+@keyframes sakhiPresenceRing {
+  0%   { transform: scale(0.98); opacity: 0.85; }
+  65%  { opacity: 0; }
+  100% { transform: scale(1.06); opacity: 0; }
+}
+
+/* Compose fade-in */
+@keyframes companionFadeIn {
+  from { opacity: 0; transform: translateY(8px); }
+  to   { opacity: 1; transform: translateY(0); }
+}
+.companion-fade-in {
+  animation: companionFadeIn 700ms cubic-bezier(0.2, 0.8, 0.2, 1) both;
+}
+.companion-fade-in-delay-1 { animation-delay: 120ms; }
+.companion-fade-in-delay-2 { animation-delay: 260ms; }
+.companion-fade-in-delay-3 { animation-delay: 420ms; }
+.companion-fade-in-delay-4 { animation-delay: 600ms; }
+
+@media (prefers-reduced-motion: reduce) {
+  .companion-fade-in {
+    animation: none;
+  }
+}
+
+/* ───────────────────────────────────────────────────────────────────────
+   SAKHI 3D AVATAR — TalkingHead (WebGL) + Three.js stage shell.
+   The 3D avatar itself is rendered by @met4citizen/talkinghead into a
+   transparent canvas; these rules only dress the stage frame, live-status
+   pill and graceful loading/error overlays.
+   ─────────────────────────────────────────────────────────────────────── */
+
+.sakhi-avatar-3d {
+  position: relative;
+  width: 100%;
+  aspect-ratio: 4 / 5;
+  overflow: hidden;
+  border-radius: 18px;
+  background:
+    radial-gradient(130% 95% at 50% 10%, rgba(185, 28, 28, 0.2) 0%, rgba(30, 26, 58, 0.22) 48%, rgba(6, 6, 14, 0.4) 100%);
+  box-shadow:
+    inset 0 0 0 1px rgba(185, 28, 28, 0.16),
+    0 24px 70px -30px rgba(127, 29, 29, 0.5);
+}
+
+.sakhi-avatar-3d canvas {
+  position: absolute;
+  inset: 0;
+  width: 100%;
+  height: 100% !important;
+  display: block;
+  touch-action: manipulation;
+}
+
+.sakhi-avatar-pill {
+  position: absolute;
+  bottom: 12px;
+  left: 50%;
+  transform: translateX(-50%);
+  display: inline-flex;
+  align-items: center;
+  gap: 7px;
+  padding: 5px 12px;
+  border-radius: 9999px;
+  background: rgba(4, 4, 12, 0.62);
+  border: 1px solid rgba(185, 28, 28, 0.35);
+  box-shadow: 0 6px 24px -8px rgba(127, 29, 29, 0.6);
+  backdrop-filter: blur(8px);
+}
+
+.sakhi-avatar-dot {
+  width: 6px;
+  height: 6px;
+  border-radius: 9999px;
+  background: #34d399;
+  box-shadow: 0 0 8px 1px rgba(52, 211, 153, 0.7);
+  animation: sakhiAvatarPulse 2.4s ease-in-out infinite;
+}
+.sakhi-avatar-dot.is-speaking {
+  background: #f87171;
+  box-shadow: 0 0 10px 2px rgba(248, 113, 113, 0.85);
+  animation: sakhiAvatarPulse 1.1s ease-in-out infinite;
+}
+@keyframes sakhiAvatarPulse {
+  0%, 100% { opacity: 1; }
+  50%      { opacity: 0.35; }
+}
+
+.sakhi-avatar-pill-text {
+  font-size: 9px;
+  font-weight: 800;
+  letter-spacing: 0.2em;
+  text-transform: uppercase;
+  color: #e2e8f0;
+}
+
+.sakhi-avatar-state {
+  position: absolute;
+  inset: 0;
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  justify-content: center;
+  gap: 10px;
+  padding: 26px 22px;
+  text-align: center;
+  background: rgba(8, 8, 18, 0.72);
+  backdrop-filter: blur(6px);
+  border-radius: 18px;
+  color: #94a3b8;
+  font-size: 12px;
+  line-height: 1.6;
+}
+
+.sakhi-avatar-state-title {
+  font-size: 13px;
+  font-weight: 800;
+  letter-spacing: 0.02em;
+  color: #f1f5f9;
+}
+
+.sakhi-avatar-state-desc {
+  font-size: 11.5px;
+  line-height: 1.6;
+  color: #94a3b8;
+  max-width: 34ch;
+}
+
+/* Boot spinner */
+.sakhi-avatar-boot {
+  width: 34px;
+  height: 34px;
+  border-radius: 9999px;
+  border: 2px solid rgba(239, 68, 68, 0.18);
+  border-top-color: rgba(248, 113, 113, 0.9);
+  animation: sakhiAvatarSpin 0.9s linear infinite;
+}
+@keyframes sakhiAvatarSpin {
+  to { transform: rotate(360deg); }
+}
+
+@media (prefers-reduced-motion: reduce) {
+  .sakhi-avatar-dot,
+  .sakhi-avatar-dot.is-speaking,
+  .sakhi-avatar-boot {
+    animation: none;
+  }
+  .sakhi-avatar-3d canvas {
+    scroll-behavior: auto;
   }
 }

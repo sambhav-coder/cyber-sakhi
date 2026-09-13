@@ -44,7 +44,7 @@ export const Navbar: React.FC = () => {
     { href: "/sos", label: "VoiceShield SOS", icon: Radio },
     { href: "/locker", label: "Evidence Locker", icon: Lock },
     { href: "/email-forensics", label: "Email Forensics", icon: Mail },
-    { href: "/companion", label: "Sakhi AI", icon: MessageSquare },
+    { href: "/sakhi", label: "Sakhi AI", icon: MessageSquare },
     { href: "/contacts", label: "Contacts", icon: Users },
     { href: "/dashboard", label: "Dashboard", icon: LayoutDashboard },
     { href: "/admin", label: "Admin Portal", icon: ShieldAlert, adminOnly: true },
