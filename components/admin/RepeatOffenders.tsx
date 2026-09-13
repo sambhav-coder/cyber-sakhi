@@ -23,7 +23,7 @@ import {
  * cannot reverse, and reporters are counted, never named.
  * ------------------------------------------------------------------ */
 
-interface Offender {
+export interface Offender {
   fingerprint: string;
   type: string;
   distinctReporters: number;
@@ -33,7 +33,7 @@ interface Offender {
   categories: string[];
 }
 
-interface Payload {
+export interface Payload {
   backend: "file" | "supabase";
   minReporters: number;
   offenders: Offender[];
@@ -64,7 +64,12 @@ function formatDay(day: string): string {
   });
 }
 
-export const RepeatOffenders: React.FC = () => {
+interface Props {
+  /** Lets the page reuse the loaded data, e.g. for the escalation export. */
+  onData?: (payload: Payload) => void;
+}
+
+export const RepeatOffenders: React.FC<Props> = ({ onData }) => {
   const [data, setData] = useState<Payload | null>(null);
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState<string | null>(null);
@@ -80,11 +85,15 @@ export const RepeatOffenders: React.FC = () => {
       const json = await res.json();
       if (!res.ok) throw new Error(json.error || `Request failed (${res.status})`);
       setData(json as Payload);
+      onData?.(json as Payload);
     } catch (err) {
       setError(err instanceof Error ? err.message : String(err));
     } finally {
       setLoading(false);
     }
+    // onData is intentionally not a dependency: a parent passing an inline
+    // function would otherwise re-trigger the fetch on every render.
+    // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [minReporters]);
 
   useEffect(() => {

@@ -15,9 +15,14 @@ import {
   RefreshCw,
   Database,
   Users,
+  Download,
 } from "lucide-react";
 import { CaseLedger, type LedgerRow } from "@/components/admin/CaseLedger";
-import { RepeatOffenders } from "@/components/admin/RepeatOffenders";
+import { CaseBreakdowns } from "@/components/admin/CaseBreakdowns";
+import {
+  RepeatOffenders,
+  type Payload as OffenderPayload,
+} from "@/components/admin/RepeatOffenders";
 import type { AdminIncident } from "@/lib/types";
 
 /* ------------------------------------------------------------------ *
@@ -81,6 +86,7 @@ export default function AdminPage() {
   const [source, setSource] = useState<Source | null>(null);
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState<string | null>(null);
+  const [offenderData, setOffenderData] = useState<OffenderPayload | null>(null);
 
   const load = useCallback(async () => {
     setLoading(true);
@@ -135,6 +141,96 @@ export default function AdminPage() {
       }).length,
     };
   }, [rows, overview]);
+
+  /* Builds the handover document an admin can give to a cyber cell. It
+   * carries operational metadata only: no survivor identity, no message
+   * content, and no raw indicators (which the server cannot recover). */
+  const exportEscalationReport = () => {
+    const line = "-".repeat(80);
+    const rule = "=".repeat(80);
+    const offenders = offenderData?.offenders ?? [];
+
+    const body = [
+      rule,
+      "CYBER SAKHI - ESCALATION REPORT",
+      "Prepared for cyber cell / institutional review",
+      rule,
+      `Generated       : ${new Date().toISOString()}`,
+      `Prepared by     : ${session?.user?.email ?? "unknown"}`,
+      `Case source     : ${
+        source === "live"
+          ? "Live case ledger"
+          : "Seeded demo ledger (NOT real cases)"
+      }`,
+      `Network store   : ${offenderData?.backend ?? "unavailable"}`,
+      "",
+      line,
+      "1. SUMMARY",
+      line,
+      `Total cases             : ${stats.total}`,
+      `Critical severity       : ${stats.critical}`,
+      `Escalated to cyber cell : ${stats.escalated}`,
+      `Still open              : ${stats.open}`,
+      `Flagged identifiers     : ${offenders.length} (reported by ${
+        offenderData?.minReporters ?? 3
+      }+ independent victims)`,
+      `Total victim reports    : ${offenderData?.totalVictimReports ?? 0}`,
+      "",
+      line,
+      "2. REPEAT OFFENDER SIGNALS",
+      line,
+      offenders.length === 0
+        ? "No identifier has crossed the reporting threshold."
+        : offenders
+            .map((o, i) =>
+              [
+                `[${i + 1}] Fingerprint : ${o.fingerprint}`,
+                `    Type        : ${o.type}`,
+                `    Victims     : ${o.distinctReporters} independent reports`,
+                `    Cities      : ${
+                  o.regions.length ? o.regions.join(", ") : "not recorded"
+                }`,
+                `    Categories  : ${o.categories.join(", ")}`,
+                `    Active      : ${o.firstSeenDay} to ${o.lastSeenDay}`,
+              ].join("\n")
+            )
+            .join("\n\n"),
+      "",
+      "NOTE: identifiers are stored as HMAC-SHA256 fingerprints keyed with a",
+      "server-side secret. The phone number, UPI ID or handle behind a",
+      "fingerprint cannot be recovered from this report. Counts are independent",
+      "reports, not proof of guilt, and must be verified before any action.",
+      "",
+      line,
+      "3. CASE LEDGER",
+      line,
+      "CASE CODE            | THREAT TYPE               | SEVERITY | STATUS",
+      ...rows.map((r) =>
+        [
+          r.code.padEnd(20).slice(0, 20),
+          (r.threatType || "").padEnd(25).slice(0, 25),
+          (r.severity || "").toUpperCase().padEnd(8).slice(0, 8),
+          r.status.replace(/_/g, " "),
+        ].join(" | ")
+      ),
+      "",
+      line,
+      "PRIVACY",
+      line,
+      "Operational metadata only. No survivor identity, message content, or raw",
+      "indicators are included in this document.",
+      rule,
+      "",
+    ].join("\n");
+
+    const blob = new Blob([body], { type: "text/plain;charset=utf-8" });
+    const url = URL.createObjectURL(blob);
+    const link = document.createElement("a");
+    link.href = url;
+    link.download = `Cyber_Sakhi_Escalation_Report_${Date.now()}.txt`;
+    link.click();
+    URL.revokeObjectURL(url);
+  };
 
   /* --------------------------- gate states --------------------------- */
 
@@ -231,6 +327,15 @@ export default function AdminPage() {
 
         <div className="flex items-center gap-2 shrink-0">
           <button
+            onClick={exportEscalationReport}
+            disabled={loading || rows.length === 0}
+            className="px-3 py-2 rounded-lg bg-emergency-600 hover:bg-emergency-500 text-white text-[11px] font-bold transition flex items-center gap-1.5 disabled:opacity-50"
+            title="Download a handover document for the cyber cell"
+          >
+            <Download className="w-3.5 h-3.5" />
+            <span>Escalation Report</span>
+          </button>
+          <button
             onClick={load}
             disabled={loading}
             className="px-3 py-2 rounded-lg bg-slate-900 hover:bg-slate-800 border border-slate-700 text-slate-300 text-[11px] font-semibold transition flex items-center gap-1.5 disabled:opacity-50"
@@ -312,7 +417,14 @@ export default function AdminPage() {
         ))}
       </div>
 
-      <RepeatOffenders />
+      <CaseBreakdowns
+        bySeverity={overview?.bySeverity}
+        byStatus={overview?.byStatus}
+        byThreatType={overview?.byThreatType}
+        rows={rows}
+      />
+
+      <RepeatOffenders onData={setOffenderData} />
 
       {loading && rows.length === 0 ? (
         <div className="h-64 rounded-2xl bg-slate-900/50 animate-pulse" />
