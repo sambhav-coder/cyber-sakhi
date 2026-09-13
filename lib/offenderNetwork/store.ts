@@ -39,8 +39,21 @@ export interface IndicatorStats {
   categories: ReportCategory[];
 }
 
+/** One identifier reported by several independent accounts. */
+export interface TopIndicator {
+  indicatorHash: string;
+  indicatorType: IndicatorType;
+  distinctReporters: number;
+  firstSeen: string;
+  lastSeen: string;
+  regions: string[];
+  categories: ReportCategory[];
+}
+
 export interface OffenderStore {
   readonly backend: "file" | "supabase";
+  /** Identifiers with at least minReporters distinct reporters, worst first. */
+  topIndicators(minReporters: number, limit: number): Promise<TopIndicator[]>;
   /** One reporter counts once per identifier; repeats are ignored, not added. */
   addReports(reports: IndicatorReport[]): Promise<{ inserted: number; duplicates: number }>;
   getStats(hashes: string[], requesterHash: string | null): Promise<Map<string, IndicatorStats>>;
@@ -76,6 +89,47 @@ export function aggregateStats(
   }
 
   return out;
+}
+
+/** Ranks identifiers by how many distinct accounts reported them. */
+export function rankIndicators(
+  rows: IndicatorReport[],
+  minReporters: number,
+  limit: number
+): TopIndicator[] {
+  const groups = new Map<string, IndicatorReport[]>();
+  for (const row of rows) {
+    const list = groups.get(row.indicatorHash);
+    if (list) list.push(row);
+    else groups.set(row.indicatorHash, [row]);
+  }
+
+  const ranked: TopIndicator[] = [];
+  for (const [indicatorHash, group] of groups) {
+    const reporters = new Set(group.map((r) => r.reporterHash));
+    if (reporters.size < minReporters) continue;
+
+    const times = group.map((r) => r.createdAt).sort();
+    ranked.push({
+      indicatorHash,
+      indicatorType: group[0].indicatorType,
+      distinctReporters: reporters.size,
+      firstSeen: times[0],
+      lastSeen: times[times.length - 1],
+      regions: Array.from(
+        new Set(group.map((r) => r.region).filter((x): x is string => Boolean(x)))
+      ).sort(),
+      categories: Array.from(new Set(group.map((r) => r.category))),
+    });
+  }
+
+  return ranked
+    .sort(
+      (a, b) =>
+        b.distinctReporters - a.distinctReporters ||
+        b.lastSeen.localeCompare(a.lastSeen)
+    )
+    .slice(0, limit);
 }
 
 /* ----------------------------- file backend --------------------------- */
@@ -140,6 +194,10 @@ class FileStore implements OffenderStore {
     return next;
   }
 
+  async topIndicators(minReporters: number, limit: number) {
+    return rankIndicators(await this.readAll(), minReporters, limit);
+  }
+
   async getStats(hashes: string[], requesterHash: string | null) {
     const wanted = new Set(hashes);
     const rows = (await this.readAll()).filter((r) => wanted.has(r.indicatorHash));
@@ -190,6 +248,27 @@ class SupabaseStore implements OffenderStore {
     throwIfError(error, "Failed to record Sakhi Network reports.");
     const inserted = (data || []).length;
     return { inserted, duplicates: reports.length - inserted };
+  }
+
+  async topIndicators(minReporters: number, limit: number) {
+    // Aggregated in JS rather than SQL: the row count is small, and it
+    // keeps both backends provably consistent by sharing rankIndicators.
+    const { data, error } = await getSupabaseServer()
+      .from(TABLE)
+      .select("indicator_hash, indicator_type, reporter_hash, category, region, created_at")
+      .order("created_at", { ascending: false })
+      .limit(5000);
+
+    throwIfError(error, "Failed to rank Sakhi Network reports.");
+    const rows: IndicatorReport[] = ((data || []) as ReportRow[]).map((r) => ({
+      indicatorHash: r.indicator_hash,
+      indicatorType: r.indicator_type,
+      reporterHash: r.reporter_hash,
+      category: r.category,
+      region: r.region,
+      createdAt: r.created_at,
+    }));
+    return rankIndicators(rows, minReporters, limit);
   }
 
   async getStats(hashes: string[], requesterHash: string | null) {
