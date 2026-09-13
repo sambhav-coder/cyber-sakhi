@@ -1,6 +1,8 @@
 import { lookupIpIntelligence } from "./ipIntelligence";
 import { lookupDomainIntelligence } from "./domainIntelligence";
 import { correlateIndicators } from "./indicatorCorrelation";
+import { analyzeMessage } from "./threatEngine";
+import type { ThreatAnalysisResult } from "./types";
 import {
   EmailAnalysisResult,
   EmailAuthentication,
@@ -226,10 +228,21 @@ function extractIpAddresses(text: string): string[] {
 // 6. Composite threat scoring
 // ---------------------------------------------------------------------------
 
+/**
+ * Everything after the first blank line is the body. When a pasted email
+ * has no blank line at all — someone pasting just the message — the whole
+ * input is treated as the body, so the threat is still read.
+ */
+function extractBodyText(raw: string): string {
+  const split = raw.search(/\r?\n\r?\n/);
+  return split === -1 ? raw.trim() : raw.slice(split).trim();
+}
+
 function computeThreatScore(
   authResult: EmailAuthentication,
   spoofing: SpoofingResult,
-  phishing: PhishingResult
+  phishing: PhishingResult,
+  harassment: ThreatAnalysisResult | null
 ): { score: number; level: EmailAnalysisResult["threatLevel"] } {
   let score = 0;
 
@@ -248,6 +261,18 @@ function computeThreatScore(
 
   // Phishing content
   score += phishing.score * 0.4; // weight phishing score at 40%
+
+  /* Harassment content.
+   *
+   * The phishing rules only cover bank and credential scams, so a
+   * sextortion email sent from a genuine Gmail account scored 0: every
+   * header check correctly passes, and no content rule matches. The
+   * harassment engine behind /detector is folded in at full weight,
+   * because for this product a credible threat IS the headline finding,
+   * not a supporting signal. */
+  if (harassment) {
+    score = Math.max(score, harassment.score);
+  }
 
   score = Math.min(100, Math.round(score));
 
@@ -273,9 +298,21 @@ function buildFindings(
   auth: EmailAuthentication,
   spoofing: SpoofingResult,
   phishing: PhishingResult,
-  hasOriginatingIp: boolean
+  hasOriginatingIp: boolean,
+  harassment: ThreatAnalysisResult | null
 ): string[] {
   const findings: string[] = [];
+
+  // Harassment leads the list: if someone is being threatened, that
+  // matters more to the reader than an SPF verdict.
+  if (harassment && harassment.threatLevel !== "SAFE") {
+    findings.push(
+      `⚠ Harassment content detected (${harassment.threatLevel}, ${harassment.score}/100): ${harassment.triggers.join(", ")}`
+    );
+    for (const section of harassment.legalSections) {
+      findings.push(`§ Applicable law: ${section.code} — ${section.title}`);
+    }
+  }
 
   // Auth findings
   if (auth.spf.status === "pass") findings.push("✓ SPF check passed — sending server is authorized by the domain's DNS record.");
@@ -421,6 +458,17 @@ export async function analyzeEmail(rawEmailInput: string): Promise<EmailAnalysis
     triggers: nlp.detail.map((d) => d.phrase),
   };
 
+  /* Step G2: Harassment / threat scoring.
+   *
+   * Reuses the engine behind /detector, so blackmail, stalking, sexual
+   * harassment and violence — in English or Hinglish — are detected in
+   * email too. The body is scored rather than the raw source, so header
+   * boilerplate cannot trip the rules. */
+  const harassmentBody = extractBodyText(rawEmailInput);
+  const harassmentInput = [headers.subject || "", harassmentBody].join("\n").trim();
+  const harassment =
+    harassmentInput.length > 0 ? analyzeMessage(harassmentInput) : null;
+
   // Step H: Originating IP — the last external hop typically carries the real sender IP
   const allIps = extractIpAddresses(headers.rawHeaders);
   // Prefer IP found in the outermost (last) Received header
@@ -517,7 +565,8 @@ export async function analyzeEmail(rawEmailInput: string): Promise<EmailAnalysis
   const { score: threatScore, level: threatLevel } = computeThreatScore(
     authentication,
     spoofing,
-    phishing
+    phishing,
+    harassment
   );
 
   // Step J2: Explainable score breakdown + confidence
@@ -556,7 +605,13 @@ export async function analyzeEmail(rawEmailInput: string): Promise<EmailAnalysis
   });
 
   // Step K: Build findings and recommendations
-  const findings = buildFindings(authentication, spoofing, phishing, !!originatingIP);
+  const findings = buildFindings(
+    authentication,
+    spoofing,
+    phishing,
+    !!originatingIP,
+    harassment
+  );
   const recommendations = buildRecommendations(threatLevel, spoofing);
 
   // Step K2: Structured, evidence-backed findings
