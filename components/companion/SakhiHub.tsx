@@ -127,11 +127,18 @@ export function SakhiHub() {
     setIsSpeaking(true);
     // Landing introduction is ALWAYS English (product policy) — the local
     // Piper English voice is used when available, else speechSynthesis.
+    console.log("🧪 [SakhiHub] TTS REQUEST:", { 
+      TTS_ENGINE: "edge-tts (via /api/voice/tts)",
+      LANGUAGE: "en",
+      TEXT_LENGTH: HUB_INTRO.length,
+      TEST_MODE: process.env.SAKHI_TEST_MODE === 'edge-tts-only' ? "edge-tts-only" : "normal"
+    });
     const handle = speakWithEngine(HUB_INTRO, voiceRef.current, {
       language: "en",
       rate: 0.97,
       pitch: 1.03,
       onStart: () => {
+        console.log("🧪 [SakhiHub] TTS AUDIO STARTED");
         speechStartedRef.current = true;
         setBlocked(false);
         setIntroPhase("speaking");
@@ -141,6 +148,7 @@ export function SakhiHub() {
         revealIntro(HUB_INTRO);
       },
       onEnd: () => {
+        console.log("🧪 [SakhiHub] TTS AUDIO COMPLETED");
         avatarRef.current?.speakEnd();
         setExpression("neutral");
         setIsSpeaking(false);
@@ -149,6 +157,7 @@ export function SakhiHub() {
         cancelIntro();
       },
       onError: () => {
+        console.error("🧪 [SakhiHub] TTS AUDIO ERROR");
         avatarRef.current?.speakEnd();
         setExpression("neutral");
         setIsSpeaking(false);

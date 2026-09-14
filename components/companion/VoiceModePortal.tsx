@@ -353,15 +353,23 @@ export function VoiceModePortal({
     setStatusText("Sakhi is speaking…");
     // Per-turn language: THIS turn decides the voice — English -> aru,
     // Hindi/Hinglish -> priyamvada. Never a session lock.
+    console.log("🧪 [Voice Mode] TTS REQUEST:", { 
+      TTS_ENGINE: "edge-tts (via /api/voice/tts)",
+      LANGUAGE: languageRef.current,
+      TEXT_LENGTH: text.length,
+      TEST_MODE: process.env.SAKHI_TEST_MODE === 'edge-tts-only' ? "edge-tts-only" : "normal"
+    });
     const handle = speakWithEngine(text, voiceRef.current, {
       language: languageRef.current,
       rate: 0.98,
       pitch: 1.04,
       onStart: () => {
+        console.log("🧪 [Voice Mode] TTS AUDIO STARTED");
         setExpression("warm");
         avatarRef.current?.speakStart(text);
       },
       onEnd: () => {
+        console.log("🧪 [Voice Mode] TTS AUDIO COMPLETED");
         avatarRef.current?.speakEnd();
         setExpression("neutral");
         setVoiceState("idle");
@@ -369,6 +377,7 @@ export function VoiceModePortal({
         setStatusText("Tap the orb to talk.");
       },
       onError: (msg) => {
+        console.error("🧪 [Voice Mode] TTS AUDIO ERROR:", msg);
         avatarRef.current?.speakEnd();
         setExpression("neutral");
         setError(msg);
@@ -468,6 +477,7 @@ export function VoiceModePortal({
     // CRITICAL: Use auto mode for STT to let the sidecar detect language from audio
     // The sidecar runs both Hindi and English models and intelligently selects
     // the best result based on Unicode character detection and Hinglish markers
+    console.log("🧪 [Voice Mode] STT ENGINE: local-vosk (on-device, offline)");
     localSttRef.current = startLocalSttRecording("auto", {
       onLevel: () => {},
       onInterim: (text) => {
@@ -475,10 +485,20 @@ export function VoiceModePortal({
         setInterim(text);
       },
       onFinal: (finalText) => {
+        console.log("🧪 [Voice Mode] STT RESULT:", { 
+          STT_ENGINE: "local-vosk", 
+          transcript: finalText,
+          length: finalText.length 
+        });
         localSttRef.current = null;
         if (voiceStateRef.current === "listening") handleUtterance(finalText);
       },
       onError: (code, message) => {
+        console.log("🧪 [Voice Mode] STT ERROR:", { 
+          STT_ENGINE: "local-vosk", 
+          code, 
+          message 
+        });
         localSttRef.current = null;
         if (code === "no_speech") {
           setVoiceState("idle");
@@ -491,6 +511,7 @@ export function VoiceModePortal({
           setStatusText("Microphone access was denied — allow the mic and tap the orb again.");
         } else if (capacities.stt) {
           // On-device engine unavailable → browser web-speech fallback.
+          console.log("🧪 [Voice Mode] FALLING BACK TO: browser-speech-recognition");
           setStatusText("Switching recognition…");
           startBrowserStt();
         } else {
@@ -518,6 +539,7 @@ export function VoiceModePortal({
     // CRITICAL: Use auto mode for browser STT fallback to allow language detection
     // The browser's SpeechRecognition will attempt to detect language from speech
     // We then use per-turn language detection to adjust for subsequent turns
+    console.log("🧪 [Voice Mode] STT ENGINE: browser-speech-recognition (fallback)");
     sttRef.current = startSttSession("auto", {
       onResult: (interimText) => {
         lastInterimRef.current = interimText;
@@ -529,6 +551,11 @@ export function VoiceModePortal({
       onEnd: () => {
         sttRef.current = null;
         const heard = lastFinalRef.current || lastInterimRef.current;
+        console.log("🧪 [Voice Mode] STT RESULT:", { 
+          STT_ENGINE: "browser-speech-recognition", 
+          transcript: heard,
+          length: heard?.length || 0
+        });
         if (voiceStateRef.current === "listening" && heard) {
           handleUtterance(heard);
         } else {
@@ -538,6 +565,11 @@ export function VoiceModePortal({
         }
       },
       onError: (code, message) => {
+        console.log("🧪 [Voice Mode] STT ERROR:", { 
+          STT_ENGINE: "browser-speech-recognition", 
+          code, 
+          message 
+        });
         sttRef.current = null;
         if (code === "not-allowed") {
           setError(message);

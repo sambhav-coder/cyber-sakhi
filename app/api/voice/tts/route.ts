@@ -22,6 +22,7 @@ export async function POST(req: NextRequest) {
       .trim();
 
     if (!text) {
+      console.error("[TTS API] No text provided");
       return NextResponse.json(
         { available: false, code: "tts_no_text", note: "No text provided." },
         { status: 400 }
@@ -33,7 +34,27 @@ export async function POST(req: NextRequest) {
         ? body.language
         : "en";
 
+    // DETERMINISTIC TEST MODE DIAGNOSTICS
+    const testMode = process.env.SAKHI_TEST_MODE === 'edge-tts-only';
+    console.log("🧪 [TTS API] ENGINE DIAGNOSTICS:", {
+      TTS_ENGINE: "edge-tts",
+      TTS_LANGUAGE: language,
+      TTS_TEXT_LENGTH: text.length,
+      TEST_MODE: testMode ? "edge-tts-only" : "normal",
+      ENVIRONMENT: process.env.VERCEL ? "vercel-production" : "local-development"
+    });
+
+    console.log("[TTS API] Synthesizing:", { language, textLength: text.length });
+
     const audio = await synthesizeWithEdgeTTS(text, language);
+
+    console.log("🧪 [TTS API] SYNTHESIS RESULT:", {
+      TTS_ENGINE: "edge-tts",
+      TTS_VOICE: audio.voice,
+      TTS_BUFFER_SIZE: audio.buffer.length,
+      TTS_MIME_TYPE: audio.mimeType,
+      SUCCESS: true
+    });
 
     return NextResponse.json({
       available: true,
@@ -43,6 +64,11 @@ export async function POST(req: NextRequest) {
       language,
     });
   } catch (error) {
+    console.error("🧪 [TTS API] SYNTHESIS FAILED:", {
+      TTS_ENGINE: "edge-tts",
+      ERROR: error instanceof Error ? error.message : "Unknown error",
+      SUCCESS: false
+    });
     return NextResponse.json(
       {
         available: false,

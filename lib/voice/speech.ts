@@ -771,6 +771,7 @@ async function fetchLocalSpeech(
   const clean = stripMarkdown(text);
   if (!clean) return { ok: false, code: "no_text", note: "" };
   try {
+    console.log("[Sakhi Voice] Fetching TTS:", { language, textLength: clean.length });
     const res = await fetch("/api/voice/tts", {
       method: "POST",
       headers: { "Content-Type": "application/json" },
@@ -782,6 +783,12 @@ async function fetchLocalSpeech(
     } catch {
       data = null;
     }
+    console.log("[Sakhi Voice] TTS API response:", { 
+      status: res.status, 
+      available: data?.available, 
+      code: data?.code,
+      note: data?.note 
+    });
     if (!res.ok || !data || data.available !== true || !data.audioB64) {
       return {
         ok: false,
@@ -793,15 +800,21 @@ async function fetchLocalSpeech(
     const bytes = new Uint8Array(bin.length);
     for (let i = 0; i < bin.length; i++) bytes[i] = bin.charCodeAt(i);
     const audioUrl = URL.createObjectURL(
-      new Blob([bytes], { type: data.mimeType || "audio/wav" })
+      new Blob([bytes], { type: data.mimeType || "audio/mpeg" })
     );
+    console.log("[Sakhi Voice] Audio blob created:", { 
+      audioUrl, 
+      voice: data.voice, 
+      mimeType: data.mimeType 
+    });
     return {
       ok: true,
       audioUrl,
       voice: data.voice || "",
-      mimeType: data.mimeType || "audio/wav",
+      mimeType: data.mimeType || "audio/mpeg",
     };
-  } catch {
+  } catch (error) {
+    console.error("[Sakhi Voice] TTS fetch failed:", error);
     return { ok: false, code: "network", note: "Could not reach the local speech engine." };
   }
 }
@@ -812,6 +825,9 @@ async function fetchLocalSpeech(
  * only if the engine is missing or breaks. Keeps the same SpeakOptions contract
  * so the orb/avatar lifecycle, cancellations and autoplay-block detection all
  * keep working.
+ * 
+ * DETERMINISTIC TEST MODE: Set process.env.SAKHI_TEST_MODE='edge-tts-only' to force
+ * only Edge TTS usage and disable all fallbacks for QA purposes.
  */
 export function speakWithEngine(
   text: string,
@@ -823,6 +839,12 @@ export function speakWithEngine(
   let startedOnce = false;
   let hadError = false;
   let currentAudio: HTMLAudioElement | null = null;
+
+  // DETERMINISTIC TEST MODE: Force Edge TTS only, disable all fallbacks
+  const testMode = process.env.SAKHI_TEST_MODE === 'edge-tts-only';
+  if (testMode) {
+    console.log("🧪 [TEST MODE] SAKHI_TEST_MODE=edge-tts-only - FORCING Edge TTS ONLY, disabling fallbacks");
+  }
 
   const overallCancel = () => {
     if (handle.cancelled) return;
@@ -839,7 +861,17 @@ export function speakWithEngine(
 
   const fallback = () => {
     if (handle.cancelled) return;
+    if (testMode) {
+      console.error("🧪 [TEST MODE] FALLBACK BLOCKED - TTS failed but fallbacks disabled in test mode");
+      if (opts.onError) {
+        opts.onError("🧪 TEST MODE: TTS failed (fallbacks disabled)");
+      }
+      return;
+    }
     console.warn("[Sakhi Voice] Local TTS engine unavailable - falling back to browser speechSynthesis");
+    if (opts.onError) {
+      opts.onError("Voice engine unavailable - using browser fallback");
+    }
     const inner = speakWithVoice(text, fallbackVoice, opts);
     cancelFns.push(inner.cancel);
   };
@@ -869,12 +901,19 @@ export function speakWithEngine(
         }
         return;
       }
+      console.log("🧪 [TEST MODE] Playing audio chunk:", { 
+        chunkIndex: i, 
+        totalChunks: chunks.length,
+        voice: srv.voice,
+        mimeType: srv.mimeType 
+      });
       const el = new Audio();
       currentAudio = el;
       el.src = srv.audioUrl;
       el.playbackRate = opts.rate ?? 1;
       try {
         await el.play();
+        console.log("🧪 [TEST MODE] Audio playback started successfully");
       } catch (e) {
         console.warn("[Sakhi Voice] Audio playback failed:", e);
         URL.revokeObjectURL(srv.audioUrl);

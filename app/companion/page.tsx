@@ -382,12 +382,19 @@ function CompanionContent() {
       // Engine-first (local Piper en_GB-aru) with the pre-resolved browser
       // voice as fallback — the SAME English voice pipeline the landing uses,
       // so the approved English voice/quality is identical across surfaces.
+      console.log("🧪 [Chat Mode] TTS REQUEST:", { 
+        TTS_ENGINE: "edge-tts (via /api/voice/tts)",
+        LANGUAGE: "en",
+        TEXT_LENGTH: text.length,
+        TEST_MODE: process.env.SAKHI_TEST_MODE === 'edge-tts-only' ? "edge-tts-only" : "normal"
+      });
       let fallbackId: number | null = null;
       const handle = speakWithEngine(text, introVoiceRef.current, {
         language: "en",
         rate: 0.97,
         pitch: 1.03,
         onStart: () => {
+          console.log("🧪 [Chat Mode] TTS AUDIO STARTED");
           speechStartedRef.current = true;
           setIsSpeaking(true);
           setSpeechBlocked(false);
@@ -401,6 +408,7 @@ function CompanionContent() {
           }, 48);
         },
         onEnd: () => {
+          console.log("🧪 [Chat Mode] TTS AUDIO COMPLETED");
           if (fallbackId !== null) window.clearInterval(fallbackId);
           setIsSpeaking(false);
           avatarRef.current?.speakEnd();
@@ -411,6 +419,7 @@ function CompanionContent() {
           resolve();
         },
         onError: () => {
+          console.error("🧪 [Chat Mode] TTS AUDIO ERROR");
           if (fallbackId !== null) window.clearInterval(fallbackId);
           setIsSpeaking(false);
           avatarRef.current?.speakEnd();
