@@ -12,6 +12,7 @@ import {
 } from "@/lib/gmailApi";
 import { decodeGmailRaw } from "@/lib/gmailDecoder";
 import { analyzeEmail } from "@/lib/emailForensics";
+import { persistCaseFromAnalysis } from "@/lib/db/casePipeline";
 
 interface RouteContext {
   params: {
@@ -125,6 +126,15 @@ export async function GET(
     // Send the real email source into the existing forensic engine.
     const analysis = await analyzeEmail(rawEmail);
 
+    // Automatically create a Case for the successful analysis, mirroring the
+    // raw-paste flow (case + email investigation + indicators).
+    const persisted = await persistCaseFromAnalysis({
+      userId: session.user.id,
+      result: analysis,
+      source: "gmail",
+      externalMessageId: gmailMessage.id,
+    });
+
     const result = NextResponse.json({
       success: true,
       message: {
@@ -135,6 +145,27 @@ export async function GET(
         internalDate: gmailMessage.internalDate || null,
       },
       analysis,
+      ...(persisted.createdCase
+        ? {
+            case: {
+              id: persisted.createdCase.id,
+              caseNumber: persisted.createdCase.case_number,
+              title: persisted.createdCase.title,
+              threatType: persisted.createdCase.threat_type,
+              status: persisted.createdCase.status,
+              severity: persisted.createdCase.severity,
+              createdAt: persisted.createdCase.created_at,
+              indicatorSaveState: persisted.indicatorSaveState,
+            },
+            caseSaveNote:
+              persisted.indicatorSaveState === "failed"
+                ? "Case created but some indicators could not be persisted."
+                : undefined,
+          }
+        : {
+            case: null,
+            caseSaveError: persisted.caseSaveError,
+          }),
     });
 
     // Update user-scoped cookie with refreshed token

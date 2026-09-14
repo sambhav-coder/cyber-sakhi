@@ -342,16 +342,20 @@ export default function GmailForensicsPage() {
         }
       );
 
-      const data = await response.json();
+      const payload = await response.json();
 
       if (!response.ok) {
-        setError(data.error || "Unable to analyze this Gmail message.");
+        setError(payload.error || "Unable to analyze this Gmail message.");
         return;
       }
 
       sessionStorage.setItem(
         "cyber_sakhi_gmail_analysis",
-        JSON.stringify(data.analysis)
+        JSON.stringify({
+          analysis: payload.analysis,
+          case: payload.case,
+          caseSaveError: payload.caseSaveError,
+        })
       );
 
       window.location.href = "/email-forensics";

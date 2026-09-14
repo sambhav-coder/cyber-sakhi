@@ -20,13 +20,16 @@ export async function createEmailInvestigation(input: {
   userId: string;
   caseId?: string;
   result: EmailAnalysisResult;
+  source?: string;
+  externalMessageId?: string | null;
 }): Promise<EmailInvestigationRow> {
   const { data, error } = await getSupabaseServer()
     .from("email_investigations")
     .insert({
       case_id: input.caseId ?? null,
       created_by: input.userId,
-      source: "pasted_headers",
+      source: input.source ?? "pasted_headers",
+      external_message_id: input.externalMessageId ?? null,
       subject: input.result.headers.subject ?? null,
       sender: input.result.headers.from ?? null,
       recipients: [input.result.headers.to ?? null, input.result.headers.cc ?? null]

@@ -438,9 +438,24 @@ export default function EmailForensicsPage() {
         "cyber_sakhi_gmail_analysis"
       );
       if (!stored) return;
-      const parsed = JSON.parse(stored) as EmailAnalysisResult;
+      const parsed = JSON.parse(stored);
       if (parsed && typeof parsed === "object") {
-        setResult(parsed);
+        if (parsed.analysis && typeof parsed.analysis === "object") {
+          setResult(parsed.analysis as EmailAnalysisResult);
+          if (parsed.case?.id) {
+            setCaseLink({
+              id: parsed.case.id,
+              caseNumber: parsed.case.caseNumber || null,
+              title: parsed.case.title || null,
+              threatType: parsed.case.threatType || null,
+              severity: parsed.case.severity || null,
+            });
+          } else if (parsed.caseSaveError) {
+            setCaseSaveError(String(parsed.caseSaveError));
+          }
+        } else {
+          setResult(parsed as EmailAnalysisResult);
+        }
         window.sessionStorage.removeItem("cyber_sakhi_gmail_analysis");
       }
     } catch {

@@ -2,21 +2,7 @@ import { NextRequest, NextResponse } from "next/server";
 import { getServerSession } from "next-auth";
 import { authOptions } from "@/lib/authOptions";
 import { analyzeEmail } from "@/lib/emailForensics";
-import { createCase } from "@/lib/db/cases";
-import { createEmailInvestigation } from "@/lib/db/emailInvestigations";
-import { createIndicators } from "@/lib/db/indicators";
-
-function classifyThreatType(result: Awaited<ReturnType<typeof analyzeEmail>>): string {
-  const auth = result.authentication;
-  const authFail =
-    auth.spf.status === "fail" ||
-    auth.dkim.status === "fail" ||
-    auth.dmarc.status === "fail";
-
-  if (authFail || result.senderSpoofingDetected) return "EMAIL_PHISHING";
-  if (result.threatScore >= 40) return "EMAIL_FRAUD";
-  return "EMAIL_INVESTIGATION";
-}
+import { persistCaseFromAnalysis } from "@/lib/db/casePipeline";
 
 export async function POST(req: NextRequest) {
   try {
@@ -52,77 +38,33 @@ export async function POST(req: NextRequest) {
       return NextResponse.json(result);
     }
 
-    const threatType = classifyThreatType(result);
-    const title = result.headers.subject?.trim().slice(0, 120) ||
-      `Email Investigation — ${result.senderDomain || "unknown sender"}`;
+    const persisted = await persistCaseFromAnalysis({
+      userId: session.user.id,
+      result,
+    });
 
-    let createdCase: Awaited<ReturnType<typeof createCase>> | null = null;
-    let caseSaveError: string | undefined;
-
-    try {
-      createdCase = await createCase({
-        userId: session.user.id,
-        title,
-        description: [
-          `Forensic scan of an email from ${result.senderDomain || "unknown sender"}.`,
-          `Findings: ${result.findings.length}. Indicators: ${result.indicators.length}.`,
-          result.senderSpoofingDetected
-            ? "Spoofing signals detected."
-            : "No spoofing signals detected.",
-        ].join(" "),
-        threatType,
-        status: "open",
-        severity: result.threatLevel,
+    if (!persisted.createdCase) {
+      return NextResponse.json({
+        ...result,
+        case: null,
+        caseSaveError: persisted.caseSaveError,
       });
-    } catch (caseError) {
-      caseSaveError =
-        "Analysis succeeded but the case could not be persisted: " +
-        (caseError instanceof Error ? caseError.message : "unknown error");
-    }
-
-    if (!createdCase) {
-      return NextResponse.json({ ...result, case: null, caseSaveError });
-    }
-
-    let investigationId: string | undefined;
-    try {
-      const investigation = await createEmailInvestigation({
-        userId: session.user.id,
-        caseId: createdCase.id,
-        result,
-      });
-      investigationId = investigation.id;
-    } catch {
-      investigationId = undefined;
-    }
-
-    let indicatorSaveState = "ok";
-    if (investigationId) {
-      try {
-        await createIndicators({
-          investigationId,
-          caseId: createdCase.id,
-          indicators: result.indicators,
-        });
-      } catch {
-        indicatorSaveState = "failed";
-      }
     }
 
     return NextResponse.json({
       ...result,
       case: {
-        id: createdCase.id,
-        caseNumber: createdCase.case_number,
-        title: createdCase.title,
-        threatType: createdCase.threat_type,
-        status: createdCase.status,
-        severity: createdCase.severity,
-        createdAt: createdCase.created_at,
-        indicatorSaveState,
+        id: persisted.createdCase.id,
+        caseNumber: persisted.createdCase.case_number,
+        title: persisted.createdCase.title,
+        threatType: persisted.createdCase.threat_type,
+        status: persisted.createdCase.status,
+        severity: persisted.createdCase.severity,
+        createdAt: persisted.createdCase.created_at,
+        indicatorSaveState: persisted.indicatorSaveState,
       },
       caseSaveNote:
-        indicatorSaveState === "failed"
+        persisted.indicatorSaveState === "failed"
           ? "Case created but some indicators could not be persisted."
           : undefined,
     });
