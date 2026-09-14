@@ -468,16 +468,23 @@ export function VoiceModePortal({
     setVoiceState("listening");
     setOrbState("listening");
     setStatusText("Listening… I'll take it when you pause.");
-    startLocalMic();
+
+    // Production/Vercel: use the browser SpeechRecognition path directly.
+    // Local development: keep the existing Vosk/Piper path for offline testing.
+    if (process.env.NODE_ENV === "production") {
+      startBrowserStt();
+    } else {
+      startLocalMic();
+    }
   };
 
-  /** PRIMARY mic: Sakhi's private on-device (Vosk) speech engine — free,
-   *  off-line, no cloud, no Gemini. Audio never leaves the machine. */
+  /** Development-only mic: local Vosk/Piper speech engine.
+   *  Production uses the browser SpeechRecognition path above. */
   const startLocalMic = () => {
     // CRITICAL: Use auto mode for STT to let the sidecar detect language from audio
     // The sidecar runs both Hindi and English models and intelligently selects
     // the best result based on Unicode character detection and Hinglish markers
-    console.log("🧪 [Voice Mode] STT ENGINE: local-vosk (on-device, offline)");
+    console.log("🧪 [Voice Mode] STT ENGINE: local-vosk (development-only, offline)");
     localSttRef.current = startLocalSttRecording("auto", {
       onLevel: () => {},
       onInterim: (text) => {
@@ -526,7 +533,7 @@ export function VoiceModePortal({
     });
   };
 
-  /** SECONDARY mic: the browser's native web-speech API (existing behavior). */
+  /** Production mic: the browser's native Web Speech API. */
   const startBrowserStt = () => {
     if (!capacities.stt) {
       setVoiceState("error");
@@ -536,10 +543,10 @@ export function VoiceModePortal({
       setTypingBox(true);
       return;
     }
-    // CRITICAL: Use auto mode for browser STT fallback to allow language detection
-    // The browser's SpeechRecognition will attempt to detect language from speech
-    // We then use per-turn language detection to adjust for subsequent turns
-    console.log("🧪 [Voice Mode] STT ENGINE: browser-speech-recognition (fallback)");
+    // Use the browser's native SpeechRecognition API in production.
+    // The transcript is then language-detected per turn, and that detected
+    // language controls Sakhi's response/TTS for the current turn.
+    console.log("🧪 [Voice Mode] STT ENGINE: browser-speech-recognition");
     sttRef.current = startSttSession("auto", {
       onResult: (interimText) => {
         lastInterimRef.current = interimText;
