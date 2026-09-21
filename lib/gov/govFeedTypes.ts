@@ -61,4 +61,4 @@ export interface GovFeedSourceMeta {
   error?: string;
 }
 
-export type GovCacheStatus = "live" | "cached" | "offline";
+export type GovCacheStatus = "live" | "cached" | "offline" | "fallback";

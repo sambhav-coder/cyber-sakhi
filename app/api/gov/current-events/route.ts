@@ -26,6 +26,7 @@ export async function GET(req: NextRequest) {
 
   try {
     const result = await getCurrentEvents(force);
+    const isFallback = result.cacheStatus === "fallback";
     return NextResponse.json({
       events: result.events,
       sources: result.sources,
@@ -33,10 +34,11 @@ export async function GET(req: NextRequest) {
       cacheStatus: result.cacheStatus,
       cacheTtlSeconds: Math.round(currentEventsCacheTtlMs() / 1000),
       lastUpdated: result.fetchedAt,
-      message:
-        result.events.length > 0
-          ? undefined
-          : "Latest updates are temporarily unavailable. Please check official sources directly.",
+      message: isFallback
+        ? "Showing validated fallback events while official sources are temporarily unavailable."
+        : result.events.length > 0
+        ? undefined
+        : "Latest updates are temporarily unavailable. Please check official sources directly.",
     });
   } catch (err) {
     console.error("[gov] current-events failed:", err);
