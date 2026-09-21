@@ -1,1 +1,4 @@
-import { requireGovPage } from "@/lib/gov/govGuard"; import { GovDataView } from "@/components/gov/GovDataView"; export const dynamic = "force-dynamic"; export default async function Page(){await requireGovPage("case.view_meta"); return <GovDataView title="Case Explorer" description="Server-paginated case metadata. Victim PII is excluded from this view." endpoint="/api/gov/cases?page=1&pageSize=25"/>;}
+import { requireGovPage } from "@/lib/gov/govGuard";
+import { GovCaseExplorer } from "@/components/gov/GovCaseExplorer";
+export const dynamic = "force-dynamic";
+export default async function Page(){await requireGovPage("case.view_meta"); return <GovCaseExplorer/>;}
