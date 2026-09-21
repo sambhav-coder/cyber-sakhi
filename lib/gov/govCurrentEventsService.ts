@@ -45,13 +45,15 @@ export async function collectCurrentEvents(nowIso: string): Promise<GovEventsRes
         items: res.value.length,
       });
     } else {
+      const errorMsg = res.reason instanceof Error ? res.reason.message : "source unavailable";
+      console.error(`[I4C] Source ${runnable.id} failed:`, errorMsg);
       sources.push({
         id: runnable.id,
         name: runnable.name,
         homeUrl: runnable.homeUrl,
         ok: false,
         items: 0,
-        error: res.reason instanceof Error ? res.reason.message : "source unavailable",
+        error: errorMsg,
       });
     }
   });

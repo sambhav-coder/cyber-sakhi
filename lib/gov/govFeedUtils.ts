@@ -158,20 +158,38 @@ export function newsId(sourceId: string, basis: string): string {
 }
 
 /** Shared fetcher with a hard timeout — always returns text or throws. */
-export async function fetchHtmlText(url: string, timeoutMs = 12000): Promise<string> {
+export async function fetchHtmlText(url: string, timeoutMs = 15000): Promise<string> {
   const controller = new AbortController();
   const timer = setTimeout(() => controller.abort(), timeoutMs);
   try {
     const res = await fetch(url, {
       signal: controller.signal,
       headers: {
-        "User-Agent": "CyberSakhiGovPortal/1.0 (+https://cyber-sakhi.local)",
-        Accept: "text/html,application/xhtml+xml",
+        "User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36",
+        Accept: "text/html,application/xhtml+xml,application/xml;q=0.9,image/webp,*/*;q=0.8",
+        "Accept-Language": "en-US,en;q=0.9",
+        "Accept-Encoding": "gzip, deflate, br",
+        "Connection": "keep-alive",
+        "Upgrade-Insecure-Requests": "1",
       },
       cache: "no-store",
+      // Vercel/serverless may need these options for external requests
+      // @ts-ignore - Next.js specific option
+      next: { revalidate: 0 },
     });
-    if (!res.ok) throw new Error(`HTTP ${res.status}`);
-    return await res.text();
+    if (!res.ok) {
+      throw new Error(`HTTP ${res.status} from ${url}`);
+    }
+    const text = await res.text();
+    if (!text || text.length < 100) {
+      throw new Error(`Empty or truncated response from ${url}`);
+    }
+    return text;
+  } catch (error) {
+    if (error instanceof Error && error.name === 'AbortError') {
+      throw new Error(`Request timeout after ${timeoutMs}ms for ${url}`);
+    }
+    throw error;
   } finally {
     clearTimeout(timer);
   }

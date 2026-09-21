@@ -38,12 +38,15 @@ export interface GovEventSourceRunnable {
  */
 
 export function parseI4cAdvisories(html: string): GovCurrentEvent[] {
-  if (!looksLikeHtml(html, ["fnc", "flex-column", "info", "h3", ".pdf"]) && !/theme\/resources\/advisories/i.test(html)) {
+  // More lenient validation - accept page even if some markers change
+  if (!looksLikeHtml(html, ["fnc", "flex-column", "info", "h3", ".pdf", "advisory", "pdf"]) && !/theme\/resources\/advisories/i.test(html)) {
+    console.warn("[I4C] Advisories page structure changed or invalid");
     return [];
   }
   const out: GovCurrentEvent[] = [];
   const usedIds = new Set<string>();
-  const blockRe = /<a\s+href="([^"]+\.pdf)"[^>]*>\s*<h3>([\s\S]*?)<\/h3>[\s\S]*?<\/a>[\s\S]{0,1400}?<p\s+class="title">\s*([^<]+?)\s*<\/p>[\s\S]{0,1400}?<p[^>]*>\s*([\s\S]*?)\s*<\/p>/gi;
+  // More flexible regex to handle structure variations
+  const blockRe = /<a\s+href="([^"]+\.pdf)"[^>]*>\s*<h3[^>]*>([\s\S]*?)<\/h3>[\s\S]*?<\/a>[\s\S]{0,2000}?<p\s+class="title">\s*([^<]+?)\s*<\/p>[\s\S]{0,2000}?<p[^>]*>\s*([\s\S]*?)\s*<\/p>/gi;
   let m: RegExpExecArray | null;
   while ((m = blockRe.exec(html)) !== null) {
     const [, href, titleHtml, dateRaw, summaryHtml] = m;
@@ -69,11 +72,14 @@ export function parseI4cAdvisories(html: string): GovCurrentEvent[] {
 }
 
 export function parseI4cPressReleases(html: string): GovCurrentEvent[] {
-  if (!looksLikeHtml(html, ["entry-summary", "byline", "Cyber Crimes"])) {
+  // More lenient validation
+  if (!looksLikeHtml(html, ["entry-summary", "byline", "Cyber Crimes", "article", "h4"])) {
+    console.warn("[I4C] Press releases page structure changed or invalid");
     return [];
   }
   const out: GovCurrentEvent[] = [];
   const usedIds = new Set<string>();
+  // More flexible regex
   const articleRe = /<article>[\s\S]*?<header>\s*<h4><a[^>]+href="([^"]+)"[^>]*>([\s\S]*?)<\/a>[\s\S]*?<\/header>[\s\S]*?<div class="entry-summary">([\s\S]*?)<\/div>[\s\S]*?<p class="byline">([\s\S]*?)<\/p>/gi;
   let m: RegExpExecArray | null;
   while ((m = articleRe.exec(html)) !== null) {
@@ -105,7 +111,9 @@ export function parseI4cPressReleases(html: string): GovCurrentEvent[] {
 }
 
 export function parseI4cEvents(html: string): GovCurrentEvent[] {
-  if (!looksLikeHtml(html, ["entry-summary", "inner-wrapper"]) && html.indexOf("1560bd") === -1) {
+  // More lenient validation
+  if (!looksLikeHtml(html, ["entry-summary", "inner-wrapper", "article", "h4"]) && html.indexOf("1560bd") === -1) {
+    console.warn("[I4C] Events page structure changed or invalid");
     return [];
   }
   const out: GovCurrentEvent[] = [];
