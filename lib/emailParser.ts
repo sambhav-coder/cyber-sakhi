@@ -3,63 +3,63 @@ import {
   SMTPHop,
 } from "./emailTypes";
 import { extractValidatedIps } from "./ip";
+import { decodeMimeWords } from "./mimeWords";
+
+export { decodeMimeWords };
+
+function escapeRegex(text: string): string {
+  return text.replace(/[.*+?^${}()|[\]\\]/g, "\\$&");
+}
+
+/** Matches one header (with folded continuation lines). `[ \t]*` rather than
+ *  `\s*` so an empty header never swallows the header on the next line. */
+function headerPattern(headerName: string, flags: string): RegExp {
+  return new RegExp(
+    `^${escapeRegex(headerName)}:[ \\t]*(.*(?:\\r?\\n[ \\t].*)*)$`,
+    flags
+  );
+}
+
+function unfold(value: string): string {
+  return value.replace(/\r?\n[ \t]+/g, " ").trim();
+}
 
 export function getHeaderValue(rawHeaders: string, headerName: string): string | undefined {
-  const regex = new RegExp(
-    `^${headerName}:\\s*(.+(?:\\r?\\n[ \\t].+)*)$`,
-    "im"
-  );
-
-  const match = rawHeaders.match(regex);
-
+  const match = rawHeaders.match(headerPattern(headerName, "im"));
   if (!match) return undefined;
-
-  return match[1]
-    .replace(/\r?\n[ \t]+/g, " ")
-    .trim();
+  const value = unfold(match[1]);
+  return value || undefined;
 }
 
 function getHeaderValues(rawHeaders: string, headerName: string): string[] {
-  const matches = rawHeaders.match(
-    new RegExp(`^${headerName}:\\s*(.+(?:\\r?\\n[ \\t].+)*)$`, "gim")
-  );
-  if (!matches) return [];
-  return matches.map((header) =>
-    header
-      .replace(new RegExp(`^${headerName}:\\s*`, "i"), "")
-      .replace(/\r?\n[ \t]+/g, " ")
-      .trim()
-  );
+  const results: string[] = [];
+  for (const match of rawHeaders.matchAll(headerPattern(headerName, "gim"))) {
+    const value = unfold(match[1]);
+    if (value) results.push(value);
+  }
+  return results;
 }
 
 function getReceivedHeaders(rawHeaders: string): string[] {
-  const matches = rawHeaders.match(
-    /^Received:\s*(.+(?:\r?\n[ \t].+)*)$/gim
-  );
-
-  if (!matches) return [];
-
-  return matches.map((header) =>
-    header
-      .replace(/^Received:\s*/i, "")
-      .replace(/\r?\n[ \t]+/g, " ")
-      .trim()
-  );
+  return getHeaderValues(rawHeaders, "Received");
 }
 
 export function extractHeaders(rawEmail: string): EmailHeaderAnalysis {
-  const headerEnd = rawEmail.search(/\r?\n\r?\n/);
+  // Pasted emails often start with blank lines; without this the header /
+  // body split lands at position 0 and every header goes missing.
+  const email = rawEmail.replace(/^(?:[ \t]*\r?\n)+/, "");
+  const headerEnd = email.search(/\r?\n[ \t]*\r?\n/);
 
   const rawHeaders =
-    headerEnd === -1 ? rawEmail.trim() : rawEmail.slice(0, headerEnd).trim();
+    headerEnd === -1 ? email.trim() : email.slice(0, headerEnd).trim();
 
   return {
-    from: getHeaderValue(rawHeaders, "From"),
-    to: getHeaderValue(rawHeaders, "To"),
-    cc: getHeaderValue(rawHeaders, "Cc"),
-    replyTo: getHeaderValue(rawHeaders, "Reply-To"),
+    from: decodeMimeWords(getHeaderValue(rawHeaders, "From")),
+    to: decodeMimeWords(getHeaderValue(rawHeaders, "To")),
+    cc: decodeMimeWords(getHeaderValue(rawHeaders, "Cc")),
+    replyTo: decodeMimeWords(getHeaderValue(rawHeaders, "Reply-To")),
     returnPath: getHeaderValue(rawHeaders, "Return-Path"),
-    subject: getHeaderValue(rawHeaders, "Subject"),
+    subject: decodeMimeWords(getHeaderValue(rawHeaders, "Subject")),
     date: getHeaderValue(rawHeaders, "Date"),
     messageId: getHeaderValue(rawHeaders, "Message-ID"),
     authenticationResults: getHeaderValue(
@@ -68,7 +68,7 @@ export function extractHeaders(rawEmail: string): EmailHeaderAnalysis {
     ),
     received: getReceivedHeaders(rawHeaders),
     rawHeaders,
-    sender: getHeaderValue(rawHeaders, "Sender"),
+    sender: decodeMimeWords(getHeaderValue(rawHeaders, "Sender")),
     contentType: getHeaderValue(rawHeaders, "Content-Type"),
     xOriginatingIp: getHeaderValue(rawHeaders, "X-Originating-IP"),
     xMailer: getHeaderValue(rawHeaders, "X-Mailer"),

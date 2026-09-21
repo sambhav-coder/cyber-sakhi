@@ -523,6 +523,9 @@ export async function analyzeEmail(
   options: AnalyzeEmailOptions = {}
 ): Promise<EmailAnalysisResult> {
   const offline = options.offline === true;
+  // Leading blank lines (common in pasted emails) would otherwise make every
+  // header/body split below treat the whole message as body.
+  rawEmailInput = rawEmailInput.replace(/^(?:[ \t]*\r?\n)+/, "");
   const id = "ef_" + Date.now() + "_" + Math.random().toString(36).substring(2, 6);
   const analyzedAt = new Date().toISOString();
 

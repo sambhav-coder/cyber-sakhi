@@ -3,6 +3,8 @@
  * Extracts structured data from the Email Forensic Analysis Report format
  */
 
+import { decodeMimeWords } from "./mimeWords";
+
 export interface ParsedEmailForensicsData {
   isEmailForensics: boolean;
   threatLevel?: string;
@@ -210,47 +212,7 @@ export function getAuthStatusColor(status?: string): string {
  */
 export function decodeMimeSubject(subject?: string): string {
   if (!subject) return '';
-  
-  try {
-    // If it doesn't look like MIME encoded, return as-is
-    if (!subject.includes('=?')) {
-      return subject;
-    }
-
-    // Replace MIME encoded words
-    // Format: =?charset?encoding?encoded-text?=
-    const mimePattern = /=\?([A-Za-z0-9_-]+)\?([QB])\?([^?]+)\?=/g;
-    
-    let decoded = subject.replace(mimePattern, (match, charset, encoding, encodedText) => {
-      try {
-        if (encoding.toUpperCase() === 'Q') {
-          // Quoted-printable decoding
-          const text = encodedText.replace(/_/g, ' ');
-          return decodeURIComponent(text.replace(/=([0-9A-F]{2})/g, (_: string, hex: string) => 
-            String.fromCharCode(parseInt(hex, 16))
-          ));
-        } else if (encoding.toUpperCase() === 'B') {
-          // Base64 decoding
-          const decoded = atob(encodedText);
-          try {
-            return new TextDecoder(charset).decode(new Uint8Array([...decoded].map(c => c.charCodeAt(0))));
-          } catch {
-            return decoded;
-          }
-        }
-      } catch (e) {
-        // If decoding fails, return original
-        return match;
-      }
-      return match;
-    });
-
-    // Clean up any remaining encoding artifacts
-    return decoded.replace(/\s+/g, ' ').trim();
-  } catch (e) {
-    // If anything fails, return a cleaned version of original
-    return subject.replace(/=\?[^?]+\?[QB]\?[^?]+\?=/g, '[encoded]').trim();
-  }
+  return (decodeMimeWords(subject) ?? subject).replace(/s+/g, ' ').trim();
 }
 
 /**
