@@ -1,6 +1,6 @@
 "use client";
 
-import React, { useCallback, useEffect, useMemo, useState } from "react";
+import React, { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import Link from "next/link";
 import { useSession } from "next-auth/react";
 import { EyebrowBadge } from "@/components/ui/EyebrowBadge";
@@ -40,6 +40,62 @@ interface EnrichedGmailMessage {
   subject?: string | null;
   date?: string | null;
 }
+
+/* ------------------------------------------------------------------ *
+ * Quick-scan severity. Every message in the list is triaged by
+ * /api/gmail/scan (offline analysis, no case created) and colour coded.
+ * Colours always travel with a text label, never alone.
+ * ------------------------------------------------------------------ */
+type Severity = "SAFE" | "LOW" | "MEDIUM" | "HIGH" | "CRITICAL";
+
+interface QuickScan {
+  level: Severity;
+  score: number;
+  reason?: string | null;
+}
+
+const SEVERITY_ORDER: Severity[] = ["CRITICAL", "HIGH", "MEDIUM", "LOW", "SAFE"];
+
+const SEVERITY_META: Record<
+  Severity,
+  { label: string; stripe: string; tint?: string; chip: string; dot: string }
+> = {
+  CRITICAL: {
+    label: "Critical",
+    stripe: "rgb(239 68 68 / 0.95)",
+    tint: "linear-gradient(90deg, rgba(239,68,68,0.14), rgba(239,68,68,0) 45%)",
+    chip: "bg-red-950/80 border-red-500/60 text-red-200",
+    dot: "bg-red-500",
+  },
+  HIGH: {
+    label: "High",
+    stripe: "rgb(249 115 22 / 0.9)",
+    tint: "linear-gradient(90deg, rgba(249,115,22,0.10), rgba(249,115,22,0) 45%)",
+    chip: "bg-orange-950/70 border-orange-500/50 text-orange-200",
+    dot: "bg-orange-500",
+  },
+  MEDIUM: {
+    label: "Medium",
+    stripe: "rgb(251 191 36 / 0.85)",
+    chip: "bg-amber-950/60 border-amber-500/40 text-amber-200",
+    dot: "bg-amber-400",
+  },
+  LOW: {
+    label: "Low",
+    stripe: "rgb(34 211 238 / 0.6)",
+    chip: "bg-cyan-950/50 border-cyan-600/40 text-cyan-200",
+    dot: "bg-cyan-400",
+  },
+  SAFE: {
+    label: "Safe",
+    stripe: "rgb(52 211 153 / 0.55)",
+    chip: "bg-emerald-950/50 border-emerald-600/40 text-emerald-200",
+    dot: "bg-emerald-400",
+  },
+};
+
+const SCAN_BATCH = 20;
+const scanCacheKey = (userId: string) => `cyber_sakhi_gmail_scan_${userId}`;
 
 interface GmailListResponse {
   messages: EnrichedGmailMessage[];
@@ -220,6 +276,34 @@ export default function GmailForensicsPage() {
   const [sidebarFolder, setSidebarFolder] = useState<string>("INBOX");
   const [searchQuery, setSearchQuery] = useState<string>("");
 
+  const [windowDays, setWindowDays] = useState<number>(30);
+  const [scanResults, setScanResults] = useState<Record<string, QuickScan>>({});
+  const scanResultsRef = useRef<Record<string, QuickScan>>({});
+  const scanRunRef = useRef(0);
+  const [scanState, setScanState] = useState<{
+    running: boolean;
+    done: number;
+    total: number;
+    error: string | null;
+  }>({ running: false, done: 0, total: 0, error: null });
+  const [severityFilter, setSeverityFilter] = useState<Severity | "ALL">("ALL");
+
+  // Load this user's cached quick-scan results (or clear them on sign-out).
+  useEffect(() => {
+    scanRunRef.current++;
+    let cached: Record<string, QuickScan> = {};
+    if (currentUserId) {
+      try {
+        cached = JSON.parse(localStorage.getItem(scanCacheKey(currentUserId)) || "{}");
+      } catch {
+        cached = {};
+      }
+    }
+    scanResultsRef.current = cached;
+    setScanResults(cached);
+    setSeverityFilter("ALL");
+  }, [currentUserId]);
+
   // Reset all Gmail state when the authenticated user changes
   useEffect(() => {
     if (sessionStatus === "authenticated" && session?.user?.id) {
@@ -287,6 +371,10 @@ export default function GmailForensicsPage() {
 
       setMessages(gmailData.messages || []);
       setIsConnected(true);
+      setWindowDays(
+        (gmailData as GmailListResponse & { window?: { days?: number } }).window
+          ?.days ?? 30
+      );
 
       const allIds = new Set((gmailData.messages || []).map((m) => m.id));
       setSelectedIds((prev) => {
@@ -311,6 +399,83 @@ export default function GmailForensicsPage() {
     }
   }, [loadMessages, sessionStatus, session?.user?.id]);
 
+  // Quick-scan every listed message that has no cached result yet, newest
+  // first, in small batches so colours fill in progressively.
+  useEffect(() => {
+    if (!isConnected || !currentUserId || messages.length === 0) return;
+    const all = messages.map((m) => m.id);
+    const pending = all.filter((id) => !scanResultsRef.current[id]);
+    if (pending.length === 0) {
+      setScanState({ running: false, done: all.length, total: all.length, error: null });
+      return;
+    }
+
+    const run = ++scanRunRef.current;
+    const userId = currentUserId;
+
+    (async () => {
+      let done = all.length - pending.length;
+      setScanState({ running: true, done, total: all.length, error: null });
+
+      for (let i = 0; i < pending.length; i += SCAN_BATCH) {
+        if (scanRunRef.current !== run) return;
+        const batch = pending.slice(i, i + SCAN_BATCH);
+        try {
+          const res = await fetch("/api/gmail/scan", {
+            method: "POST",
+            headers: { "Content-Type": "application/json" },
+            body: JSON.stringify({ ids: batch }),
+          });
+          const json = await res.json();
+          if (!res.ok) throw new Error(json.error || `Scan failed (${res.status})`);
+          if (scanRunRef.current !== run) return;
+
+          const next = { ...scanResultsRef.current };
+          for (const r of json.results as Array<{
+            id: string;
+            level?: Severity;
+            score?: number;
+            reason?: string | null;
+          }>) {
+            if (r.level && typeof r.score === "number") {
+              next[r.id] = { level: r.level, score: r.score, reason: r.reason ?? null };
+            }
+          }
+          scanResultsRef.current = next;
+          setScanResults(next);
+          try {
+            localStorage.setItem(scanCacheKey(userId), JSON.stringify(next));
+          } catch {
+            /* storage full or blocked: results still show for this visit */
+          }
+          done += batch.length;
+          setScanState({ running: true, done, total: all.length, error: null });
+        } catch (err) {
+          if (scanRunRef.current !== run) return;
+          setScanState({
+            running: false,
+            done,
+            total: all.length,
+            error: err instanceof Error ? err.message : "Quick scan failed",
+          });
+          return;
+        }
+      }
+      if (scanRunRef.current === run) {
+        setScanState({ running: false, done: all.length, total: all.length, error: null });
+      }
+    })();
+  }, [messages, isConnected, currentUserId]);
+
+  const severityCounts = useMemo(() => {
+    const counts: Record<Severity, number> = { CRITICAL: 0, HIGH: 0, MEDIUM: 0, LOW: 0, SAFE: 0 };
+    for (const m of messages) {
+      const r = scanResults[m.id];
+      if (r) counts[r.level]++;
+    }
+    return counts;
+  }, [messages, scanResults]);
+
   const handleConnectGmail = () => {
     window.location.href = "/api/gmail/connect";
   };
@@ -327,6 +492,17 @@ export default function GmailForensicsPage() {
     setStarredLocal(new Set());
     setIsConnected(false);
     setError(null);
+
+    // Disconnecting Gmail also forgets what was learned from it.
+    scanRunRef.current++;
+    scanResultsRef.current = {};
+    setScanResults({});
+    setScanState({ running: false, done: 0, total: 0, error: null });
+    try {
+      localStorage.removeItem(scanCacheKey(session.user.id));
+    } catch {
+      /* nothing to clear */
+    }
   };
 
   const handleAnalyze = async (messageId: string) => {
@@ -397,8 +573,12 @@ export default function GmailForensicsPage() {
       });
     }
 
+    if (severityFilter !== "ALL") {
+      list = list.filter((m) => scanResults[m.id]?.level === severityFilter);
+    }
+
     return list;
-  }, [messages, searchQuery, sidebarFolder]);
+  }, [messages, searchQuery, sidebarFolder, severityFilter, scanResults]);
 
   const allVisibleSelected =
     filteredMessages.length > 0 &&
@@ -1024,10 +1204,85 @@ export default function GmailForensicsPage() {
                     </span>
                   </span>
                   <span className="text-[10px] font-mono text-slate-500">
-                    {messages.length} total · read-only forensic access
+                    {messages.length} in the last {windowDays} days · read-only forensic access
                   </span>
                 </div>
               </div>
+
+              {messages.length > 0 ? (
+                <div className="flex flex-col gap-2 px-3 lg:px-4 py-2.5 border-b border-slate-800/50 bg-slate-950/40">
+                  <div className="flex flex-wrap items-center justify-between gap-2">
+                    <div className="flex items-center gap-2 text-[11px] text-slate-400">
+                      {scanState.running ? (
+                        <Loader2 className="w-3.5 h-3.5 animate-spin text-emergency-400 motion-reduce:animate-none" />
+                      ) : (
+                        <ShieldAlert className="w-3.5 h-3.5 text-emergency-400" />
+                      )}
+                      <span className="tabular-nums">
+                        {scanState.running
+                          ? `Quick-scanning ${scanState.done} of ${scanState.total} emails…`
+                          : `Quick-scanned ${Object.keys(scanResults).filter((id) => messages.some((m) => m.id === id)).length} of ${messages.length} emails`}
+                      </span>
+                      {severityCounts.CRITICAL + severityCounts.HIGH > 0 ? (
+                        <span className="text-red-300 font-semibold">
+                          · {severityCounts.CRITICAL + severityCounts.HIGH} need attention
+                        </span>
+                      ) : null}
+                    </div>
+                    <span className="text-[10px] text-slate-500">
+                      Quick scan skips live network checks and creates no case. Open an email for full forensics.
+                    </span>
+                  </div>
+
+                  {scanState.running && scanState.total > 0 ? (
+                    <div className="h-1 w-full rounded-full bg-slate-800 overflow-hidden" aria-hidden>
+                      <div
+                        className="h-full bg-emergency-500 transition-[width] duration-300"
+                        style={{ width: `${Math.round((scanState.done / scanState.total) * 100)}%` }}
+                      />
+                    </div>
+                  ) : null}
+
+                  {scanState.error ? (
+                    <div className="text-[11px] text-red-300">
+                      Quick scan stopped: {scanState.error}. Refresh to retry.
+                    </div>
+                  ) : null}
+
+                  <div className="flex flex-wrap items-center gap-1.5" role="group" aria-label="Filter by severity">
+                    <button
+                      type="button"
+                      onClick={() => setSeverityFilter("ALL")}
+                      aria-pressed={severityFilter === "ALL"}
+                      className={`px-2 py-0.5 rounded-md border text-[10px] font-bold uppercase tracking-wide transition ${
+                        severityFilter === "ALL"
+                          ? "bg-slate-200 text-slate-900 border-slate-200"
+                          : "bg-slate-900/60 text-slate-400 border-slate-700/60 hover:text-slate-200"
+                      }`}
+                    >
+                      All
+                    </button>
+                    {SEVERITY_ORDER.map((level) => {
+                      const meta = SEVERITY_META[level];
+                      const active = severityFilter === level;
+                      return (
+                        <button
+                          key={level}
+                          type="button"
+                          onClick={() => setSeverityFilter(active ? "ALL" : level)}
+                          aria-pressed={active}
+                          className={`inline-flex items-center gap-1 px-2 py-0.5 rounded-md border text-[10px] font-bold uppercase tracking-wide tabular-nums transition ${
+                            active ? meta.chip : "bg-slate-900/60 text-slate-400 border-slate-700/60 hover:text-slate-200"
+                          }`}
+                        >
+                          <span className={`w-1.5 h-1.5 rounded-full ${meta.dot}`} aria-hidden />
+                          {meta.label} {severityCounts[level]}
+                        </button>
+                      );
+                    })}
+                  </div>
+                </div>
+              ) : null}
 
               <div className="flex-1 min-h-[320px]">
                 {isLoading ? (
@@ -1093,6 +1348,8 @@ export default function GmailForensicsPage() {
                         starredLocal.has(message.id) ||
                         labels.includes("STARRED");
                       const isAnalyzing = analyzingId === message.id;
+                      const scan = scanResults[message.id];
+                      const sevMeta = scan ? SEVERITY_META[scan.level] : null;
 
                       const visibleBadges: {
                         label: string;
@@ -1139,6 +1396,14 @@ export default function GmailForensicsPage() {
                                 ? "shadow-[inset_3px_0_0_0_rgb(148_163_184_/_0.4)]"
                                 : ""
                             }`}
+                            style={
+                              sevMeta && !isSelected
+                                ? {
+                                    boxShadow: `inset 4px 0 0 0 ${sevMeta.stripe}`,
+                                    backgroundImage: sevMeta.tint,
+                                  }
+                                : undefined
+                            }
                           >
                             <div
                               className="flex items-center py-0.5"
@@ -1260,6 +1525,27 @@ export default function GmailForensicsPage() {
 
                             <div className="flex lg:flex-col items-center lg:items-end justify-end gap-1 lg:gap-1.5 shrink-0 pl-1 min-w-[60px] lg:min-w-[96px]">
                               <div className="flex items-center gap-1">
+                                {sevMeta && scan ? (
+                                  <span
+                                    className={`inline-flex items-center gap-1 px-1.5 py-0.5 rounded-md border text-[9px] font-bold uppercase tracking-wide tabular-nums ${sevMeta.chip}`}
+                                    title={
+                                      scan.reason
+                                        ? `Quick scan: ${sevMeta.label} (${scan.score}/100) — ${scan.reason}`
+                                        : `Quick scan: ${sevMeta.label} (${scan.score}/100)`
+                                    }
+                                  >
+                                    <span className={`w-1.5 h-1.5 rounded-full ${sevMeta.dot}`} aria-hidden />
+                                    {sevMeta.label} · {scan.score}
+                                  </span>
+                                ) : scanState.running ? (
+                                  <span
+                                    className="inline-flex items-center gap-1 px-1.5 py-0.5 rounded-md border border-slate-700/60 bg-slate-900/60 text-[9px] font-bold uppercase tracking-wide text-slate-500"
+                                    title="Waiting for quick scan"
+                                  >
+                                    <Loader2 className="w-2.5 h-2.5 animate-spin motion-reduce:animate-none" />
+                                    Scanning
+                                  </span>
+                                ) : null}
                                 {visibleBadges.length > 2 ? (
                                   <span
                                     className="hidden sm:inline-flex items-center px-1.5 py-0.5 rounded-md border bg-slate-800 border-slate-700 text-[9px] font-bold text-slate-300"

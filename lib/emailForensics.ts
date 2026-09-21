@@ -508,7 +508,21 @@ function buildRecommendations(
 // 8. Main export: analyzeEmail()
 // ---------------------------------------------------------------------------
 
-export async function analyzeEmail(rawEmailInput: string): Promise<EmailAnalysisResult> {
+export interface AnalyzeEmailOptions {
+  /**
+   * Skip every live network enrichment (IP intelligence, proxy screening,
+   * domain DNS, RDAP, DNS auth re-verification, blocklists). Used to triage
+   * a whole inbox quickly without hammering third-party services. Scoring
+   * logic is otherwise identical; only network-derived signals are absent.
+   */
+  offline?: boolean;
+}
+
+export async function analyzeEmail(
+  rawEmailInput: string,
+  options: AnalyzeEmailOptions = {}
+): Promise<EmailAnalysisResult> {
+  const offline = options.offline === true;
   const id = "ef_" + Date.now() + "_" + Math.random().toString(36).substring(2, 6);
   const analyzedAt = new Date().toISOString();
 
@@ -637,14 +651,14 @@ export async function analyzeEmail(rawEmailInput: string): Promise<EmailAnalysis
   const originatingIP = selectOriginatingIp(smtpPath, headers.rawHeaders);
 
   // Step H2: Look up public IP intelligence (geo/ISP/ASN)
-  const ipIntelligence = originatingIP
+  const ipIntelligence = originatingIP && !offline
     ? await lookupIpIntelligence(originatingIP)
     : undefined;
 
   // Step H2b: VPN / TOR / datacenter screening for the originating IP.
   // Heuristic org-name + Tor exit-list, never a storage/verdict of identity.
   let ipProxy: ProxyEnrichment | undefined;
-  if (originatingIP) {
+  if (originatingIP && !offline) {
     try {
       ipProxy = await checkProxy(originatingIP, ipIntelligence);
     } catch {
@@ -665,7 +679,7 @@ export async function analyzeEmail(rawEmailInput: string): Promise<EmailAnalysis
 
   const uniqueDomainsForIntelligence = [...new Set(domainsForIntelligence)];
 
-  const domainResults = await Promise.all(
+  const domainResults = offline ? [] : await Promise.all(
     uniqueDomainsForIntelligence.map((domain) =>
       lookupDomainIntelligence(domain)
     )
@@ -683,7 +697,7 @@ export async function analyzeEmail(rawEmailInput: string): Promise<EmailAnalysis
   // domain — age, registrar, registrant country, status. Redacted/privacy
   // placeholders are sanitised to null, never surfaced as "real" owners.
   let rdap: RdapDomainRecord | undefined;
-  if (senderDomain) {
+  if (senderDomain && !offline) {
     try {
       rdap = await lookupRdap(senderDomain);
     } catch {
@@ -697,7 +711,7 @@ export async function analyzeEmail(rawEmailInput: string): Promise<EmailAnalysis
   // claimed, catching tampered/absent auth headers. Never blocks the result:
   // network failure -> dnsAuth stays undefined.
   let dnsAuth: DnsAuthVerification | undefined;
-  if (senderDomain) {
+  if (senderDomain && !offline) {
     try {
       dnsAuth = await verifyDomainAuthentication(
         senderDomain,
@@ -774,7 +788,7 @@ export async function analyzeEmail(rawEmailInput: string): Promise<EmailAnalysis
   let threatIntel: ThreatIntelResult | undefined;
   try {
     const intelInput = indicators.filter((i) => i.type === "ip" || i.type === "domain");
-    if (intelInput.length > 0) {
+    if (intelInput.length > 0 && !offline) {
       threatIntel = await queryThreatIntel(intelInput);
     }
   } catch {

@@ -11,6 +11,39 @@ import {
   GmailTokenPayload,
 } from "@/lib/gmailApi";
 
+/* ------------------------------------------------------------------ *
+ * GET /api/gmail/messages?days=30
+ *
+ * Lists the user's mail from the last `days` days (default 30, max 90),
+ * following Gmail's pagination instead of stopping at the first 20
+ * results. Capped at MAX_MESSAGES so a very busy inbox cannot turn one
+ * request into thousands of Gmail API calls.
+ * ------------------------------------------------------------------ */
+
+const DEFAULT_DAYS = 30;
+const MAX_DAYS = 90;
+const MAX_MESSAGES = 300;
+const PAGE_SIZE = 100;
+// Gmail allows ~50 message reads per second per user; stay well under it.
+const METADATA_CONCURRENCY = 8;
+
+async function mapLimit<T, R>(
+  items: T[],
+  limit: number,
+  fn: (item: T) => Promise<R>
+): Promise<R[]> {
+  const out = new Array<R>(items.length);
+  let next = 0;
+  const workers = Array.from({ length: Math.min(limit, items.length) }, async () => {
+    while (next < items.length) {
+      const i = next++;
+      out[i] = await fn(items[i]);
+    }
+  });
+  await Promise.all(workers);
+  return out;
+}
+
 export async function GET(req: NextRequest) {
   const session = await getServerSession(authOptions);
 
@@ -32,6 +65,12 @@ export async function GET(req: NextRequest) {
     );
   }
 
+  const requestedDays = Number(req.nextUrl.searchParams.get("days"));
+  const days =
+    Number.isFinite(requestedDays) && requestedDays >= 1
+      ? Math.min(Math.floor(requestedDays), MAX_DAYS)
+      : DEFAULT_DAYS;
+
   try {
     let tokenData: GmailTokenPayload =
       parseGmailToken(encryptedToken);
@@ -46,40 +85,53 @@ export async function GET(req: NextRequest) {
       tokenData = await refreshGmailAccessToken(tokenData.refreshToken);
     }
 
-    const url = new URL(
-      "https://gmail.googleapis.com/gmail/v1/users/me/messages"
-    );
+    const authHeader = { Authorization: `Bearer ${tokenData.accessToken}` };
 
-    url.searchParams.set("maxResults", "20");
-    url.searchParams.set("includeSpamTrash", "true");
+    // 1. Collect message ids for the window, page by page.
+    const messageIds: string[] = [];
+    let pageToken: string | undefined;
+    let resultSizeEstimate = 0;
 
-    const response = await fetch(url.toString(), {
-      headers: {
-        Authorization: `Bearer ${tokenData.accessToken}`,
-      },
-      cache: "no-store",
-    });
-
-    if (!response.ok) {
-      const errorText = await response.text();
-
-      return NextResponse.json(
-        {
-          error: "Failed to fetch Gmail messages.",
-          details: errorText,
-        },
-        { status: response.status }
+    do {
+      const url = new URL(
+        "https://gmail.googleapis.com/gmail/v1/users/me/messages"
       );
-    }
+      url.searchParams.set("maxResults", String(PAGE_SIZE));
+      url.searchParams.set("includeSpamTrash", "true");
+      url.searchParams.set("q", `newer_than:${days}d`);
+      if (pageToken) url.searchParams.set("pageToken", pageToken);
 
-    const data = await response.json();
+      const response = await fetch(url.toString(), {
+        headers: authHeader,
+        cache: "no-store",
+      });
 
-    const messageIds = (data.messages || []).map(
-      (m: { id: string; threadId?: string }) => m.id
-    );
+      if (!response.ok) {
+        const errorText = await response.text();
+        return NextResponse.json(
+          {
+            error: "Failed to fetch Gmail messages.",
+            details: errorText,
+          },
+          { status: response.status }
+        );
+      }
 
-    const enrichedMessages = await Promise.all(
-      messageIds.map(async (id: string) => {
+      const data = await response.json();
+      if (!resultSizeEstimate) resultSizeEstimate = data.resultSizeEstimate || 0;
+      for (const m of (data.messages || []) as { id: string }[]) {
+        if (messageIds.length < MAX_MESSAGES) messageIds.push(m.id);
+      }
+      pageToken = data.nextPageToken || undefined;
+    } while (pageToken && messageIds.length < MAX_MESSAGES);
+
+    const capped = Boolean(pageToken);
+
+    // 2. Fetch list metadata for each id, a few at a time.
+    const enrichedMessages = await mapLimit(
+      messageIds,
+      METADATA_CONCURRENCY,
+      async (id: string) => {
         try {
           const msgUrl = new URL(
             `https://gmail.googleapis.com/gmail/v1/users/me/messages/${id}`
@@ -91,9 +143,7 @@ export async function GET(req: NextRequest) {
           msgUrl.searchParams.append("metadataHeaders", "Date");
 
           const msgRes = await fetch(msgUrl.toString(), {
-            headers: {
-              Authorization: `Bearer ${tokenData.accessToken}`,
-            },
+            headers: authHeader,
             cache: "no-store",
           });
 
@@ -129,13 +179,18 @@ export async function GET(req: NextRequest) {
         } catch {
           return { id };
         }
-      })
+      }
     );
 
     const result = NextResponse.json({
       messages: enrichedMessages,
-      nextPageToken: data.nextPageToken || null,
-      resultSizeEstimate: data.resultSizeEstimate || 0,
+      nextPageToken: capped ? pageToken : null,
+      resultSizeEstimate,
+      window: {
+        days,
+        maxMessages: MAX_MESSAGES,
+        capped,
+      },
     });
 
     // Update user-scoped cookie with refreshed token
