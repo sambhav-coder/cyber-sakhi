@@ -34,5 +34,5 @@ export async function POST(req: Request) {
  const checksum = crypto.createHash("sha256").update(output).digest("hex"); const filename = `cyber-sakhi-cases-${new Date().toISOString().slice(0,10)}.${isPdf ? "pdf" : "csv"}`;
  await recordGovExport({ officerId: guard.context.officer.id, reportType: "CASES", format: body.format, filters, scopedState: guard.context.officer.state_code, scopedDistrict: guard.context.officer.district_code, rowCount: dataset.rows.length, fileName: filename, checksum });
  const audit = buildGovAuditEvent({ action: "report.exported", actor: govOfficerAuditActor(guard.context.officer), permission: "report.export", result: "allow", correlationId: crypto.randomUUID(), payload: { format: body.format, rows: dataset.rows.length, filters } }); if (audit) await persistGovAuditEvent(audit, { swallow: true });
- return new NextResponse(output, { headers: { "Content-Type": isPdf ? "application/pdf" : "text/csv; charset=utf-8", "Content-Disposition": `attachment; filename="${filename}"`, "Cache-Control": "no-store" } });
+ return new NextResponse(typeof output === "string" ? output : new Uint8Array(output), { headers: { "Content-Type": isPdf ? "application/pdf" : "text/csv; charset=utf-8", "Content-Disposition": `attachment; filename="${filename}"`, "Cache-Control": "no-store" } });
 }
