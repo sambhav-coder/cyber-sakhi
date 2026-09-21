@@ -1,0 +1,719 @@
+/* ============================================================
+   Cyber-Sakhi Government Portal — scoped design tokens (UI-only).
+   Separate visual language for /gov: restrained navy/slate base,
+   controlled blue/teal accent. Deliberately distinct from the public
+   emergency-red product language. Loaded only by app/gov/layout.tsx.
+   ============================================================ */
+
+:root {
+  --gov-bg-0: #0a1222;
+  --gov-bg-1: #070d1a;
+  --gov-bg-2: #060b16;
+  --gov-surface: rgba(15, 23, 42, 0.55);
+  --gov-border: rgba(148, 163, 184, 0.16);
+  --gov-border-strong: rgba(148, 163, 184, 0.28);
+  --gov-accent: #38bdf8;
+  --gov-accent-strong: #0ea5e9;
+  --gov-accent-deep: #2563eb;
+  --gov-teal: #2dd4bf;
+  --gov-text: #e2e8f0;
+  --gov-text-muted: #94a3b8;
+  --gov-text-subtle: #64748b;
+  --gov-radius: 1rem;
+}
+
+.gov-portal {
+  background-color: var(--gov-bg-1);
+  background-image:
+    radial-gradient(60rem 40rem at 85% -10%, rgba(37, 99, 235, 0.12), transparent 60%),
+    radial-gradient(50rem 36rem at -10% 110%, rgba(20, 184, 166, 0.09), transparent 60%),
+    linear-gradient(180deg, var(--gov-bg-0) 0%, var(--gov-bg-1) 45%, var(--gov-bg-2) 100%);
+  background-attachment: fixed;
+  color: var(--gov-text);
+  min-height: 100vh;
+}
+
+/* Focus visibility is global to the portal and satisfies WCAG (not just
+   pointer-dependent styling). */
+.gov-portal :focus-visible {
+  outline: 2px solid rgba(56, 189, 248, 0.7);
+  outline-offset: 2px;
+  border-radius: 6px;
+}
+
+.gov-panel {
+  background: var(--gov-surface);
+  border: 1px solid var(--gov-border);
+  border-radius: var(--gov-radius);
+  box-shadow: 0 24px 70px -40px rgba(2, 6, 23, 0.9);
+  backdrop-filter: blur(10px);
+  -webkit-backdrop-filter: blur(10px);
+}
+
+.gov-eyebrow {
+  display: inline-flex;
+  align-items: center;
+  gap: 0.5rem;
+  padding: 0.35rem 0.8rem;
+  border-radius: 9999px;
+  border: 1px solid rgba(56, 189, 248, 0.3);
+  background: rgba(56, 189, 248, 0.08);
+  color: #7dd3fc;
+  font-family: ui-monospace, "SFMono-Regular", Menlo, Consolas, monospace;
+  font-size: 0.68rem;
+  font-weight: 700;
+  letter-spacing: 0.16em;
+  text-transform: uppercase;
+}
+
+.gov-btn-primary {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  gap: 0.5rem;
+  padding: 0.78rem 1.5rem;
+  border-radius: 0.8rem;
+  border: 1px solid transparent;
+  font-size: 0.875rem;
+  font-weight: 700;
+  color: #ffffff;
+  background: linear-gradient(135deg, var(--gov-accent-strong) 0%, var(--gov-accent-deep) 100%);
+  box-shadow: 0 14px 34px -16px rgba(37, 99, 235, 0.55);
+  transition: all 180ms cubic-bezier(0.4, 0, 0.2, 1);
+}
+
+.gov-btn-primary:hover {
+  filter: brightness(1.08);
+  transform: translateY(-1px);
+  box-shadow: 0 18px 40px -16px rgba(37, 99, 235, 0.72);
+}
+
+.gov-btn-primary:disabled {
+  opacity: 0.55;
+  transform: none;
+  cursor: not-allowed;
+}
+
+.gov-btn-ghost {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  gap: 0.5rem;
+  padding: 0.78rem 1.5rem;
+  border-radius: 0.8rem;
+  border: 1px solid var(--gov-border-strong);
+  font-size: 0.875rem;
+  font-weight: 600;
+  color: #cbd5e1;
+  background: rgba(15, 23, 42, 0.55);
+  transition: all 180ms cubic-bezier(0.4, 0, 0.2, 1);
+}
+
+.gov-btn-ghost:hover {
+  border-color: rgba(56, 189, 248, 0.5);
+  color: #f1f5f9;
+  background: rgba(30, 41, 59, 0.65);
+}
+
+.gov-label {
+  display: block;
+  font-size: 0.8rem;
+  font-weight: 600;
+  color: var(--gov-text);
+  margin-bottom: 0.4rem;
+}
+
+.gov-input {
+  width: 100%;
+  padding: 0.75rem 1rem;
+  border-radius: 0.8rem;
+  border: 1px solid var(--gov-border);
+  background: rgba(2, 6, 23, 0.6);
+  color: var(--gov-text);
+  font-size: 0.875rem;
+  transition: all 150ms cubic-bezier(0.4, 0, 0.2, 1);
+}
+
+.gov-input::placeholder {
+  color: var(--gov-text-subtle);
+}
+
+.gov-input:focus {
+  outline: none;
+  border-color: rgba(56, 189, 248, 0.6);
+  box-shadow: 0 0 0 3px rgba(56, 189, 248, 0.22);
+}
+
+.gov-link {
+  display: inline-flex;
+  align-items: center;
+  gap: 0.35rem;
+  font-size: 0.875rem;
+  font-weight: 600;
+  color: #7dd3fc;
+  transition: color 150ms ease;
+}
+
+.gov-link:hover {
+  color: #bae6fd;
+  text-decoration: underline;
+  text-underline-offset: 4px;
+}
+
+.gov-tag {
+  display: inline-flex;
+  align-items: center;
+  gap: 0.375rem;
+  padding: 0.22rem 0.6rem;
+  border-radius: 9999px;
+  border: 1px solid var(--gov-border-strong);
+  font-family: ui-monospace, "SFMono-Regular", Menlo, Consolas, monospace;
+  font-size: 0.62rem;
+  font-weight: 700;
+  letter-spacing: 0.12em;
+  text-transform: uppercase;
+  white-space: nowrap;
+}
+
+.gov-tag--preview {
+  color: #94a3b8;
+  border-color: rgba(148, 163, 184, 0.26);
+  background: rgba(148, 163, 184, 0.06);
+}
+
+.gov-tag--planned {
+  color: #7dd3fc;
+  border-color: rgba(56, 189, 248, 0.32);
+  background: rgba(56, 189, 248, 0.08);
+}
+
+.gov-tag--restricted {
+  color: #fbbf24;
+  border-color: rgba(251, 191, 36, 0.32);
+  background: rgba(251, 191, 36, 0.08);
+}
+
+.gov-tag--secure {
+  color: #6ee7b7;
+  border-color: rgba(52, 211, 153, 0.32);
+  background: rgba(52, 211, 153, 0.08);
+}
+
+.gov-divider {
+  border-color: rgba(148, 163, 184, 0.14);
+}
+
+/* ============================================================
+   Landing-page redesign: motion, hero, scanline, reveal.
+   All animations degrade cleanly under prefers-reduced-motion.
+   ============================================================ */
+
+/* Slow seal orbit (decorative rotating ring inside the brand seal). */
+.gov-seal-orbit {
+  animation: govSealOrbit 32s linear infinite;
+  transform-origin: 60px 60px;
+}
+@keyframes govSealOrbit {
+  to { transform: rotate(360deg); }
+}
+
+/* Hero content entrance — staggered rise on first paint. */
+.gov-hero-enter {
+  opacity: 0;
+  transform: translateY(18px);
+  animation: govFadeRise 900ms cubic-bezier(0.22, 1, 0.36, 1) forwards;
+}
+@keyframes govFadeRise {
+  to {
+    opacity: 1;
+    transform: translateY(0);
+  }
+}
+
+/* "Welcome to" kicker — slides up with a slight letter-spacing settle. */
+.gov-welcome-kicker {
+  display: block;
+  font-family: ui-monospace, "SFMono-Regular", Menlo, Consolas, monospace;
+  font-size: 0.78rem;
+  font-weight: 700;
+  letter-spacing: 0.34em;
+  text-transform: uppercase;
+  color: #5eead4;
+  opacity: 0;
+  transform: translateY(14px);
+  filter: blur(8px);
+  animation: govKickerIn 1000ms cubic-bezier(0.22, 1, 0.36, 1) 100ms forwards;
+}
+@keyframes govKickerIn {
+  to {
+    opacity: 1;
+    transform: translateY(0);
+    filter: blur(0);
+  }
+}
+
+/* Main heading lines - staggered reveal with blur and upward movement. */
+.gov-hero-line-1 {
+  opacity: 0;
+  transform: translateY(20px);
+  filter: blur(10px);
+  animation: govHeadingLineIn 1200ms cubic-bezier(0.22, 1, 0.36, 1) 300ms forwards;
+}
+.gov-hero-line-2 {
+  opacity: 0;
+  transform: translateY(20px);
+  filter: blur(10px);
+  animation: govHeadingLineIn 1200ms cubic-bezier(0.22, 1, 0.36, 1) 500ms forwards;
+}
+@keyframes govHeadingLineIn {
+  to {
+    opacity: 1;
+    transform: translateY(0);
+    filter: blur(0);
+  }
+}
+
+/* Hero description - fade up with blur. */
+.gov-hero-description {
+  opacity: 0;
+  transform: translateY(16px);
+  filter: blur(6px);
+  animation: govDescriptionIn 1000ms cubic-bezier(0.22, 1, 0.36, 1) 700ms forwards;
+}
+@keyframes govDescriptionIn {
+  to {
+    opacity: 1;
+    transform: translateY(0);
+    filter: blur(0);
+  }
+}
+
+/* Hero CTA - fade up with scale. */
+.gov-hero-cta {
+  opacity: 0;
+  transform: translateY(12px) scale(0.98);
+  animation: govCtaIn 900ms cubic-bezier(0.22, 1, 0.36, 1) 900ms forwards;
+}
+@keyframes govCtaIn {
+  to {
+    opacity: 1;
+    transform: translateY(0) scale(1);
+  }
+}
+
+/* Live indicator — red pulsing dot with a soft halo, paired with a textual
+   "LIVE" label (never color-only). */
+.gov-live-dot {
+  width: 9px;
+  height: 9px;
+  border-radius: 9999px;
+  background: #f87171;
+  box-shadow: 0 0 0 0 rgba(248, 113, 113, 0.6);
+  animation: govLivePulse 2s cubic-bezier(0.4, 0, 0.6, 1) infinite;
+}
+@keyframes govLivePulse {
+  0%   { box-shadow: 0 0 0 0 rgba(248, 113, 113, 0.6); }
+  70%  { box-shadow: 0 0 0 7px rgba(248, 113, 113, 0); }
+  100% { box-shadow: 0 0 0 0 rgba(248, 113, 113, 0); }
+}
+
+/* Scroll reveal — element starts hidden, moves in when .gov-revealed lands. */
+.gov-reveal {
+  opacity: 0;
+  transform: translateY(24px);
+  transition:
+    opacity 700ms cubic-bezier(0.22, 1, 0.36, 1),
+    transform 700ms cubic-bezier(0.22, 1, 0.36, 1);
+}
+.gov-reveal.gov-revealed {
+  opacity: 1;
+  transform: translateY(0);
+}
+
+/* Developer scanline trickling down the hero right edge. */
+.gov-scanline-track {
+  position: absolute;
+  top: 0;
+  bottom: 0;
+  left: 50%;
+  width: 1px;
+  background: rgba(56, 189, 248, 0.12);
+}
+.gov-scanline {
+  position: absolute;
+  left: -2px;
+  width: 5px;
+  height: 40vh;
+  background: linear-gradient(180deg, transparent, rgba(45, 212, 191, 0.5), transparent);
+  filter: blur(2px);
+  animation: govScan 9s ease-in-out infinite;
+}
+@keyframes govScan {
+  0%   { top: -45vh; opacity: 0; }
+  15%  { opacity: 1; }
+  85%  { opacity: 1; }
+  100% { top: 105vh; opacity: 0; }
+}
+
+/* Gentle upward float for small decorative accents. */
+.gov-float {
+  animation: govFloat 7s ease-in-out infinite;
+}
+@keyframes govFloat {
+  0%, 100% { transform: translateY(0); }
+  50%      { transform: translateY(-7px); }
+}
+
+/* Primary CTA — premium gradient, hover lift, arrow nudge, press, focus. */
+.gov-cta-primary {
+  position: relative;
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  gap: 0.55rem;
+  padding: 0.85rem 1.75rem;
+  border-radius: 0.75rem;
+  font-size: 0.925rem;
+  font-weight: 700;
+  color: #ffffff;
+  background:
+    linear-gradient(135deg, rgba(2, 132, 199, 0.25), transparent 60%),
+    linear-gradient(135deg, #0284c7 0%, #1d4ed8 100%);
+  box-shadow:
+    0 10px 30px -10px rgba(29, 78, 216, 0.6),
+    inset 0 1px 0 rgba(255, 255, 255, 0.22);
+  transition:
+    transform 200ms cubic-bezier(0.22, 1, 0.36, 1),
+    box-shadow 200ms ease,
+    filter 200ms ease;
+}
+.gov-cta-primary::after {
+  content: "";
+  position: absolute;
+  inset: 0;
+  border-radius: inherit;
+  box-shadow: inset 0 0 0 1px rgba(255, 255, 255, 0.12);
+  pointer-events: none;
+}
+.gov-cta-primary:hover {
+  transform: translateY(-2px);
+  filter: brightness(1.06);
+  box-shadow:
+    0 16px 42px -10px rgba(29, 78, 216, 0.72),
+    inset 0 1px 0 rgba(255, 255, 255, 0.25);
+}
+.gov-cta-primary:active {
+  transform: translateY(0);
+}
+.gov-cta-primary .gov-cta-arrow {
+  transition: transform 200ms cubic-bezier(0.22, 1, 0.36, 1);
+}
+.gov-cta-primary:hover .gov-cta-arrow {
+  transform: translateX(4px);
+}
+
+/* Secondary CTA — quiet outlined button that fills subtly on hover. */
+.gov-cta-secondary {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  gap: 0.55rem;
+  padding: 0.85rem 1.75rem;
+  border-radius: 0.75rem;
+  font-size: 0.925rem;
+  font-weight: 600;
+  color: #cbd5e1;
+  background: rgba(15, 23, 42, 0.55);
+  border: 1px solid rgba(148, 163, 184, 0.3);
+  transition:
+    border-color 200ms ease,
+    background 200ms ease,
+    color 200ms ease,
+    transform 200ms cubic-bezier(0.22, 1, 0.36, 1);
+}
+.gov-cta-secondary:hover {
+  border-color: rgba(56, 189, 248, 0.5);
+  color: #f1f5f9;
+  background: rgba(30, 41, 59, 0.7);
+  transform: translateY(-2px);
+}
+.gov-cta-secondary:active {
+  transform: translateY(0);
+}
+
+/* Resource / official link chips in the information section. */
+.gov-resource {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 1rem;
+  padding: 0.9rem 1.1rem;
+  border: 1px solid rgba(148, 163, 184, 0.18);
+  border-radius: 0.8rem;
+  background: rgba(10, 16, 32, 0.5);
+  transition:
+    border-color 200ms ease,
+    background 200ms ease,
+    transform 200ms ease;
+}
+.gov-resource:hover {
+  border-color: rgba(56, 189, 248, 0.42);
+  background: rgba(15, 23, 42, 0.7);
+  transform: translateY(-2px);
+}
+.gov-resource .gov-resource-arrow {
+  transition: transform 200ms ease;
+}
+.gov-resource:hover .gov-resource-arrow {
+  transform: translateX(3px);
+}
+
+/* ============================================================
+   Live-feed styling.
+   ============================================================ */
+
+/* Feed scroll containers: visible thin scrollbar for reduced-motion /
+   manual use; hidden while the ticker animates (inline style). */
+.gov-feed-scroll {
+  scrollbar-width: thin;
+  scrollbar-color: rgba(56, 189, 248, 0.32) rgba(15, 23, 42, 0.4);
+}
+.gov-feed-scroll::-webkit-scrollbar {
+  width: 8px;
+}
+.gov-feed-scroll::-webkit-scrollbar-thumb {
+  background: rgba(56, 189, 248, 0.3);
+  border-radius: 9999px;
+}
+.gov-feed-scroll::-webkit-scrollbar-track {
+  background: transparent;
+}
+
+/* Per-item entrance — gentle staggered rise as the list renders. */
+.gov-feed-item {
+  opacity: 0;
+  transform: translateY(14px);
+  animation: govFeedItemIn 520ms cubic-bezier(0.22, 1, 0.36, 1) forwards;
+}
+@keyframes govFeedItemIn {
+  to {
+    opacity: 1;
+    transform: translateY(0);
+  }
+}
+
+/* The pause-and-read hint under the section heading. */
+.gov-updates-hint {
+  display: inline-flex;
+  align-items: center;
+  gap: 0.45rem;
+  padding: 0.3rem 0.7rem;
+  border-radius: 9999px;
+  border: 1px solid rgba(45, 212, 191, 0.22);
+  background: rgba(45, 212, 191, 0.06);
+  color: #99f6e4;
+  font-family: ui-monospace, "SFMono-Regular", Menlo, Consolas, monospace;
+  font-size: 0.62rem;
+  font-weight: 700;
+  letter-spacing: 0.12em;
+  text-transform: uppercase;
+}
+
+/* ============================================================
+   Cyber-safety announcement ticker (below the top navbar).
+   ============================================================ */
+.gov-ticker {
+  position: relative;
+  overflow: hidden;
+  border-bottom: 1px solid rgba(45, 212, 191, 0.14);
+  background: linear-gradient(180deg, rgba(8, 15, 31, 0.94), rgba(7, 12, 26, 0.97));
+  box-shadow:
+    inset 0 1px 0 rgba(56, 189, 248, 0.06),
+    inset 0 -1px 0 rgba(94, 234, 212, 0.05),
+    0 1px 0 rgba(5, 10, 20, 0.45);
+}
+.gov-ticker-inner {
+  display: flex;
+  align-items: center;
+  gap: 0.9rem;
+  width: 100%;
+  max-width: 80rem;
+  margin-inline: auto;
+  padding: 0.42rem 1.15rem;
+  min-height: 2.15rem;
+  font-family: ui-monospace, "SFMono-Regular", Menlo, Consolas, monospace;
+}
+.gov-ticker-label {
+  display: flex;
+  align-items: center;
+  gap: 0.4rem;
+  flex: 0 0 auto;
+  padding-right: 0.9rem;
+  border-right: 1px solid rgba(45, 212, 191, 0.18);
+  color: #5eead4;
+  font-size: 0.62rem;
+  font-weight: 800;
+  letter-spacing: 0.18em;
+  text-transform: uppercase;
+  white-space: nowrap;
+}
+/* Compact screens: drop the static label, keep the marquee full width. */
+@media (max-width: 640px) {
+  .gov-ticker-label {
+    display: none;
+  }
+  .gov-ticker-inner {
+    padding-inline: 0.9rem;
+  }
+}
+.gov-ticker-label-icon {
+  width: 0.85rem;
+  height: 0.85rem;
+  color: #2dd4bf;
+}
+.gov-ticker-viewport {
+  flex: 1 1 auto;
+  min-width: 0;
+  overflow: hidden;
+  mask-image: linear-gradient(90deg, transparent 0, #000 28px, #000 calc(100% - 28px), transparent 100%);
+  -webkit-mask-image: linear-gradient(90deg, transparent 0, #000 28px, #000 calc(100% - 28px), transparent 100%);
+}
+.gov-ticker-track {
+  display: flex;
+  align-items: center;
+  width: max-content;
+  will-change: transform;
+  animation: govTickerScroll 70s linear infinite;
+}
+.gov-ticker-track-list {
+  display: flex;
+  align-items: center;
+}
+.gov-ticker-message {
+  display: flex;
+  align-items: center;
+  white-space: nowrap;
+  color: #cbd5e1;
+  font-size: 0.76rem;
+  line-height: 1.5;
+}
+.gov-ticker-message::after {
+  content: "•";
+  margin: 0 1.05rem;
+  color: rgba(255, 255, 255, 0.22);
+}
+.gov-ticker-message-text {
+  display: inline-flex;
+  align-items: center;
+}
+.gov-ticker-link {
+  margin-inline: 0.2em;
+  color: #5eead4;
+  font-weight: 700;
+  text-decoration: underline;
+  text-decoration-color: rgba(94, 234, 212, 0.35);
+  text-underline-offset: 3px;
+  transition: color 160ms ease, text-decoration-color 160ms ease;
+}
+.gov-ticker-link:hover {
+  color: #99f6e4;
+  text-decoration-color: rgba(153, 246, 228, 0.55);
+}
+.gov-ticker-ext {
+  display: inline-block;
+  vertical-align: -0.15em;
+  margin-left: 0.3em;
+  width: 0.85em;
+  height: 0.85em;
+  opacity: 0.8;
+}
+/* Pause while hovered, focused, or actively interacted with. */
+.gov-ticker:hover .gov-ticker-track,
+.gov-ticker:focus-within .gov-ticker-track,
+.gov-ticker:active .gov-ticker-track {
+  animation-play-state: paused;
+}
+@keyframes govTickerScroll {
+  from {
+    transform: translateX(0);
+  }
+  to {
+    transform: translateX(-50%);
+  }
+}
+
+/* Reduced motion: freeze decorative animation before that block. */
+@media (prefers-reduced-motion: reduce) {
+  .gov-seal-orbit,
+  .gov-scanline,
+  .gov-float,
+  .gov-hero-enter,
+  .gov-welcome-kicker,
+  .gov-live-dot,
+  .gov-reveal,
+  .gov-hero-line-1,
+  .gov-hero-line-2,
+  .gov-hero-description,
+  .gov-hero-cta {
+    animation: none;
+    transition: none;
+  }
+  .gov-hero-enter,
+  .gov-welcome-kicker,
+  .gov-hero-line-1,
+  .gov-hero-line-2,
+  .gov-hero-description,
+  .gov-hero-cta {
+    opacity: 1;
+    transform: none;
+    filter: none;
+  }
+  .gov-live-dot {
+    box-shadow: 0 0 0 0 rgba(248, 113, 113, 0);
+  }
+  .gov-reveal {
+    opacity: 1;
+    transform: none;
+  }
+  .gov-feed-item {
+    animation: none;
+    opacity: 1;
+    transform: none;
+  }
+  .gov-updates-hint {
+    display: none;
+  }
+  /* Ticker: no continuous movement — static, readable wrapping layout. */
+  .gov-ticker-track {
+    animation: none;
+    width: auto;
+  }
+  .gov-ticker-track > ul + ul {
+    display: none;
+  }
+  .gov-ticker-track-list {
+    flex-wrap: wrap;
+    row-gap: 0.35rem;
+  }
+  .gov-ticker-message {
+    white-space: normal;
+  }
+  .gov-ticker-viewport {
+    overflow: visible;
+    mask-image: none;
+    -webkit-mask-image: none;
+  }
+  .gov-cta-primary,
+  .gov-cta-primary:hover,
+  .gov-cta-primary:active,
+  .gov-cta-secondary,
+  .gov-cta-secondary:hover,
+  .gov-cta-secondary:active,
+  .gov-resource,
+  .gov-resource:hover,
+  .gov-cta-primary .gov-cta-arrow,
+  .gov-resource .gov-resource-arrow {
+    transform: none;
+    transition: none;
+  }
+}

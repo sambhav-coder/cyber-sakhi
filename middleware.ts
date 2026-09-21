@@ -5,6 +5,11 @@ import { AUTH_SECRET } from "@/lib/authSecret";
 // Every app shell / feature page is protected. Middleware is the source of
 // truth: unauthenticated users are redirected to /login (with a callbackUrl
 // back to the page they requested once they authenticate).
+//
+// NOTE: /gov routes use a separate government authentication system
+// (GovAuth with its own session cookies) and are NOT protected by this
+// NextAuth middleware. Government routes have their own auth guards
+// in the government-specific pages and API routes.
 const PROTECTED_PREFIXES = [
   "/dashboard",
   "/locker",
@@ -17,6 +22,26 @@ const PROTECTED_PREFIXES = [
   "/admin",
   "/developer",
   "/cases",
+];
+
+// API routes that require authentication
+//
+// NOTE: /api/gov routes use a separate government authentication system
+// (GovAuth with its own session cookies) and are NOT protected by this
+// NextAuth middleware. Government APIs have their own auth guards.
+const PROTECTED_API_PREFIXES = [
+  "/api/voice",
+  "/api/email-forensics",
+  "/api/cases",
+  "/api/evidence",
+  "/api/chat",
+  "/api/anchor",
+  "/api/offender-network",
+  "/api/admin",
+  "/api/admin/retention",
+  "/api/alerts",
+  "/api/blockchain",
+  "/api/chain-of-custody",
 ];
 
 export default withAuth(
@@ -52,6 +77,16 @@ export default withAuth(
         ) {
           return !!token;
         }
+
+        // API routes require authentication - return 401 for API calls
+        if (
+          PROTECTED_API_PREFIXES.some((prefix) =>
+            req.nextUrl.pathname.startsWith(prefix)
+          )
+        ) {
+          return !!token;
+        }
+
         return true;
       },
     },
@@ -83,5 +118,16 @@ export const config = {
     "/admin/:path*",
     "/developer/:path*",
     "/cases/:path*",
+    "/api/voice/:path*",
+    "/api/email-forensics/:path*",
+    "/api/cases/:path*",
+    "/api/evidence/:path*",
+    "/api/chat/:path*",
+    "/api/anchor/:path*",
+    "/api/offender-network/:path*",
+    "/api/admin/:path*",
+    "/api/alerts/:path*",
+    "/api/blockchain/:path*",
+    "/api/chain-of-custody/:path*",
   ],
 };

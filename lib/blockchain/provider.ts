@@ -5,10 +5,14 @@
  * and are never included in any API response.
  *
  * BLOCKCHAIN_ANCHOR_ENABLED = "true" | "false" (default false)
- * BLOCKCHAIN_RPC_URL        = JSON-RPC endpoint (Ethereum, Polygon, etc.)
+ * BLOCKCHAIN_RPC_URL        = JSON-RPC endpoint (Sepolia testnet in development)
  * BLOCKCHAIN_PRIVATE_KEY    = hex-encoded private key for signing anchors
- * BLOCKCHAIN_CHAIN_ID       = expected chain ID as a string (e.g. "1", "137")
- * BLOCKCHAIN_NETWORK_NAME   = human label for the chain (e.g. "Ethereum Mainnet")
+ * BLOCKCHAIN_CHAIN_ID       = expected chain ID as a string (e.g. "11155111" for Sepolia)
+ * BLOCKCHAIN_NETWORK_NAME   = human label for the chain (e.g. "Ethereum Sepolia")
+ * BLOCKCHAIN_ANCHOR_CONTRACT_ADDRESS = optional deployed EvidenceAnchor contract
+ *                                      address; when set, evidence anchors are
+ *                                      written through the contract (hash +
+ *                                      timestamp + submitter on-chain).
  */
 
 import type { AnchorConfig, SafeProviderMeta } from "./types";
@@ -32,8 +36,9 @@ export function getAnchorConfig(): AnchorConfig {
   const privateKey = process.env.BLOCKCHAIN_PRIVATE_KEY?.trim() || null;
   const chainId = process.env.BLOCKCHAIN_CHAIN_ID?.trim() || null;
   const networkName = process.env.BLOCKCHAIN_NETWORK_NAME?.trim() || null;
+  const contractAddress = process.env.BLOCKCHAIN_ANCHOR_CONTRACT_ADDRESS?.trim() || null;
 
-  cachedConfig = { enabled, rpcUrl, privateKey, chainId, networkName };
+  cachedConfig = { enabled, rpcUrl, privateKey, chainId, networkName, contractAddress };
   return cachedConfig;
 }
 
@@ -41,6 +46,14 @@ export function getAnchorConfig(): AnchorConfig {
 export function isAnchorConfigured(): boolean {
   const c = getAnchorConfig();
   return Boolean(c.enabled && c.rpcUrl && c.privateKey && c.chainId);
+}
+
+/**
+ * Clears the cached configuration so the next getAnchorConfig() call re-reads
+ * process.env. Used by tests that mutate environment variables.
+ */
+export function resetAnchorConfig(): void {
+  cachedConfig = null;
 }
 
 /** Safe provider metadata for API consumers (no secrets). */
@@ -52,5 +65,6 @@ export function getSafeProviderMeta(): SafeProviderMeta {
     enabled: c.enabled,
     networkName: c.networkName,
     chainId: c.chainId,
+    contractAddress: c.contractAddress,
   };
 }

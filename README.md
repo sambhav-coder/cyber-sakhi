@@ -28,7 +28,7 @@ Cyber Sakhi is an AI-powered safety companion designed to provide holistic, proa
 4. **Tamper-Proof Evidence Locker (`/locker`)**
    - Secure evidence vault for screenshots, audio recordings, and chat exports.
    - Client-side **SHA-256 cryptographic checksum calculation** (Web Crypto API) ensuring strict chain-of-custody for Section 65B Indian Evidence Act compliance.
-   - Simulated IPFS CID and Blockchain transaction anchoring.
+   - **Real blockchain transaction anchoring** (when configured): each evidence item's deterministic digest is committed to a real EVM chain via a data-carrier transaction, and can be independently verified on-chain afterwards. If no blockchain is configured, the app reports `unavailable` honestly — it never fabricates a transaction. See `.env.example` for the `BLOCKCHAIN_*` variables.
    - **Export Case Dossier**: 1-click generation of formatted, complaint-ready incident reports.
 
 5. **Sakhi AI Companion / HerGuardian (`/companion`)**
@@ -85,6 +85,17 @@ The application will be accessible at `http://localhost:3000`.
 
 The application is deployed and accessible at
 `https://cyber-sakhi-sooty.vercel.app/`.
+
+### Blockchain evidence anchoring
+
+- Real (Sepolia testnet) anchoring, verification, and a deployable
+  `EvidenceAnchor` contract live under `blockchain/`.
+- Compile/deploy: `npm run chain:compile`, `npm run chain:deploy:local`,
+  `npm run chain:deploy:sepolia`.
+- Environment variables: see `.env.example` (`BLOCKCHAIN_*`) and the full guide
+  in **`docs/blockchain-anchoring.md`**.
+- No blockchain configured = honest `unavailable`, never a fabricated tx.
+
 ---
 
 

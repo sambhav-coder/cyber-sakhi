@@ -85,6 +85,12 @@ export async function createEvidence(input: {
   encryptedContent?: string;
   encryptionIv?: string;
   encryptedSize?: number;
+  /**
+   * Server-computed authoritative digest (see lib/evidenceDigest). Stored in
+   * metadata so the client-supplied sha256Hash is never used for anchoring or
+   * verification of this record.
+   */
+  integrityDigest?: string | null;
 }): Promise<EvidenceRow> {
   if (input.caseId) {
     const owns = await getCaseForUser(input.caseId, input.userId);
@@ -112,6 +118,9 @@ export async function createEvidence(input: {
         encryption: isEncrypted ? "AES-256-GCM" : null,
         locked: false,
         lockedAt: null,
+        ...(input.integrityDigest
+          ? { integrityDigest: input.integrityDigest }
+          : {}),
       },
       category: input.item.category,
       evidence_code: generateEvidenceCode(),

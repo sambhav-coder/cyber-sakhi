@@ -23,6 +23,8 @@ export interface AnchorConfig {
   privateKey: string | null;
   chainId: string | null;
   networkName: string | null;
+  /** Optional deployed EvidenceAnchor contract address (EVM). Public info. */
+  contractAddress: string | null;
 }
 
 /** Safe representation returned to API consumers. */
@@ -32,6 +34,8 @@ export interface SafeProviderMeta {
   enabled: boolean;
   networkName: string | null;
   chainId: string | null;
+  /** Deployed EvidenceAnchor contract address, if any (public info). */
+  contractAddress: string | null;
 }
 
 export interface AnchorSubmitResult {
@@ -76,4 +80,26 @@ export interface AnchorRecordView {
   provider: string;
   anchorVersion: number;
   createdAt: string;
+}
+
+/**
+ * Safe transaction view returned by the blockchain service's getTransaction().
+ * Never includes private keys, wallet addresses, or calldata content.
+ */
+export interface TransactionView {
+  txHash: string;
+  status: "ok" | "not_found" | "unavailable";
+  blockNumber: number | null;
+  /** Whether the receipt shows a successful (status == 1) execution. */
+  mined: boolean | null;
+  chainId: string | null;
+  networkName: string | null;
+  reason?: string;
+}
+
+/** Result of a read-only contract anchor lookup (no secrets). */
+export interface OnChainEvidenceAnchor {
+  digest: string;
+  timestamp: bigint;
+  submitter: string;
 }

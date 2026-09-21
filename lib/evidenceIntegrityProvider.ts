@@ -8,15 +8,19 @@
  *    Any tampering with an event breaks the chain and is detected by
  *    `verifyChainOfCustody`.
  *
- * 2. BLOCKCHAIN-ANCHOR (PROVIDER-READY / UNAVAILABLE): an optional external
- *    anchor registry would let an auditor verify that a given event hash was
- *    committed at a point in time. No registry is connected unless the admin
- *    sets EVIDENCE_ANCHOR_REGISTRY_URL. Until then the seam reports
- *    "unavailable" honestly — we never fake an external anchor.
+ * 2. BLOCKCHAIN-ANCHOR (CONDITIONAL): a real EVM anchoring provider that
+ *    commits evidence digests via data-carrier transactions. It reports
+ *    "active" only when the server is actually configured with the required
+ *    BLOCKCHAIN_* environment variables; otherwise it stays "unavailable"
+ *    with a setup note. This honestly reflects the real provider — it never
+ *    fakes an external anchor or claims on-chain commitment that did not
+ *    happen.
  *
  * This file contains NO fake backends: a provider is either genuinely active
  * (local crypto) or explicitly unavailable with a setup note.
  */
+
+import { getSafeProviderMeta } from "./blockchain/provider";
 
 export type IntegrityProviderKind = "local-crypto" | "blockchain-anchor";
 export type IntegrityProviderStatus = "active" | "unavailable";
@@ -39,11 +43,11 @@ export const LOCAL_CRYPTO_PROVIDER: IntegrityProvider = {
 
 export const BLOCKCHAIN_ANCHOR_PROVIDER: IntegrityProvider = {
   key: "blockchain-anchor",
-  label: "Blockchain Anchor Registry",
+  label: "Blockchain Anchor",
   kind: "blockchain-anchor",
   status: "unavailable",
   note:
-    "Set EVIDENCE_ANCHOR_REGISTRY_URL to connect a tamper-evident anchor registry.",
+    "Set BLOCKCHAIN_ANCHOR_ENABLED, BLOCKCHAIN_RPC_URL, BLOCKCHAIN_PRIVATE_KEY and BLOCKCHAIN_CHAIN_ID (server-side) to enable real EVM anchoring.",
 };
 
 export function getEvidenceIntegrityProvider(): IntegrityProvider {
@@ -52,19 +56,40 @@ export function getEvidenceIntegrityProvider(): IntegrityProvider {
   return LOCAL_CRYPTO_PROVIDER;
 }
 
+/**
+ * Honest reflection of the real EVM anchor provider configuration.
+ *
+ * "active" only when all required BLOCKCHAIN_* env vars are present; otherwise
+ * "unavailable" with a setup note. Never reports a fabricated anchor or claims
+ * an on-chain commitment that did not actually happen.
+ */
 export function getBlockchainAnchorStatus(): IntegrityProvider {
-  // Blockchain anchoring is only reported available when an admin has
-  // actually configured a registry AND a live commitment round succeeds.
-  // Since no registry is configured in any current deployment, we expose it
-  // as provider-ready but unavailable rather than claiming a fake anchor.
-  if (process.env.EVIDENCE_ANCHOR_REGISTRY_URL) {
+  const meta = getSafeProviderMeta();
+
+  if (!meta.enabled) {
     return {
       ...BLOCKCHAIN_ANCHOR_PROVIDER,
       note:
-        "Anchor registry URL is configured but no anchor service is connected. Verify the registry endpoint before enabling anchoring.",
+        "Blockchain anchoring is disabled — set BLOCKCHAIN_ANCHOR_ENABLED=true (server-side) to enable.",
     };
   }
-  return BLOCKCHAIN_ANCHOR_PROVIDER;
+
+  if (!meta.configured) {
+    return {
+      ...BLOCKCHAIN_ANCHOR_PROVIDER,
+      note:
+        "Blockchain anchoring is enabled but not fully configured — set BLOCKCHAIN_RPC_URL, BLOCKCHAIN_PRIVATE_KEY and BLOCKCHAIN_CHAIN_ID (server-side).",
+    };
+  }
+
+  return {
+    key: "blockchain-anchor",
+    label: `Blockchain Anchor (${meta.networkName || "EVM"})`,
+    kind: "blockchain-anchor",
+    status: "active",
+    note:
+      "Real EVM anchoring is configured. Evidence digests are committed via data-carrier transactions.",
+  };
 }
 
 export const evidenceIntegrityProviderLabel = LOCAL_CRYPTO_PROVIDER.label;

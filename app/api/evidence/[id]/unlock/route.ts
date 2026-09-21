@@ -15,6 +15,7 @@ import { authOptions } from "@/lib/authOptions";
 import { getEvidenceById, updateLockMetadata } from "@/lib/db/evidence";
 import { appendChainOfCustody } from "@/lib/db/chainOfCustody";
 import { parseEvidenceMetadata } from "@/lib/evidenceView";
+import { getAuthoritativeEvidenceDigest } from "@/lib/evidenceDigest";
 import { createHash } from "crypto";
 
 export async function POST(
@@ -135,6 +136,7 @@ export async function POST(
         fileType: evidence.mime_type || "application/octet-stream",
         fileSize: evidence.file_size ?? 0,
         sha256Hash: evidence.sha256 || "",
+        integrityDigest: getAuthoritativeEvidenceDigest(evidence),
         category: evidence.category || "OTHER",
         notes: evidence.description ?? null,
         integrityVerified: meta.integrityVerified,

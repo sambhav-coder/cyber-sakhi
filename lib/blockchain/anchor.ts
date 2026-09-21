@@ -17,8 +17,10 @@
 
 import { createHash, randomBytes } from "crypto";
 import { Wallet, JsonRpcProvider } from "ethers";
-import type { AnchorSubmitResult, AnchorVerificationResult } from "./types";
+import type { AnchorSubmitResult, AnchorVerificationResult, TransactionView } from "./types";
 import { getAnchorConfig, isAnchorConfigured, getSafeProviderMeta } from "./provider";
+import { submitEvidenceAnchor, readEvidenceAnchor } from "./evidenceAnchorContract";
+import { sanitizeBlockchainErrorMessage } from "./errorSanitizer";
 export { getSafeProviderMeta };
 
 /* ------------------------------------------------------------------ */
@@ -51,31 +53,46 @@ function toHex(bytes: Uint8Array): string {
     .join("");
 }
 
+/** Validate a 64-character lowercase hex SHA-256 digest. */
+export function isValidHexDigest(digest: string | null | undefined): boolean {
+  return typeof digest === "string" && /^[0-9a-f]{64}$/.test(digest);
+}
+
 /* ------------------------------------------------------------------ */
 /* Payload construction                                               */
 /* ------------------------------------------------------------------ */
 
 /**
- * Build a deterministic payload string and its digest for evidence anchoring.
+ * Build the descriptive payload string for an evidence anchor record and pass
+ * through the canonical evidence digest as the commitment to anchor.
+ *
+ * The digest is NOT derived by re-hashing the payload: it is the canonical
+ * evidence content digest (`sha256Hash`, see lib/evidenceDigest
+ * `getCanonicalEvidenceDigest`). Anchor and verify both use that single
+ * canonical digest function, so for unchanged evidence:
+ *   localDigest === onChainDigest === verified.
+ * The payload is a deterministic human-readable audit string stored in the
+ * anchor record; it never influences the value committed on-chain.
  *
  * Payload format (human-readable):
- *   CYBERSAKHI:ANCHOR:v1:EVIDENCE:<evidenceCode>:<sha256>:<custodyRoot>
+ *   CYBERSAKHI:ANCHOR:v2:EVIDENCE:<evidenceCode>:<canonicalEvidenceDigest>
  *
- * Digest: SHA-256 of the payload (hex-encoded).
+ * DELIBERATELY EXCLUDED: the custody root. The custody chain is mutable
+ * (append-only: every view/retrieval/anchor appends an event), so including it
+ * in the committed digest made verification depend on live state and caused
+ * "Digest mismatch" for unchanged evidence. Custody remains separately
+ * integrity-checked via chain-of-custody verification.
  */
 export function buildEvidenceAnchorPayload(input: {
-  evidenceId: string;
   evidenceCode: string;
   sha256Hash: string;
-  custodyRootHash: string;
 }): { payload: string; digest: string } {
   const payload = [
-    "CYBERSAKHI:ANCHOR:v1:EVIDENCE",
+    "CYBERSAKHI:ANCHOR:v2:EVIDENCE",
     input.evidenceCode,
     input.sha256Hash,
-    input.custodyRootHash,
   ].join(":");
-  return { payload, digest: sha256Hex(payload) };
+  return { payload, digest: input.sha256Hash };
 }
 
 /**
@@ -162,6 +179,7 @@ export async function verifyAnchorOnChain(input: {
     chainId: string | null;
   };
   currentDigest: string;
+  evidenceId?: string;
 }): Promise<AnchorVerificationResult> {
   const { record, currentDigest } = input;
 
@@ -192,6 +210,81 @@ export async function verifyAnchorOnChain(input: {
       };
     }
 
+    // Contract mode: compare the on-chain stored digest for this evidence id
+    // with the freshly recomputed digest.
+    const useContract = Boolean(config.contractAddress) && Boolean(input.evidenceId);
+    if (useContract) {
+      let anchored: { digest: string } | null = null;
+      try {
+        anchored = await readEvidenceAnchor({
+          contractAddress: config.contractAddress!,
+          provider,
+          evidenceId: input.evidenceId!,
+        });
+      } catch (err: unknown) {
+        return {
+          status: "unavailable",
+          reason: isNetworkError(err)
+            ? "Blockchain provider unreachable"
+            : `Failed to read on-chain anchor: ${sanitizeBlockchainErrorMessage(err)}`,
+        };
+      }
+
+      if (!anchored) {
+        return {
+          status: "failed",
+          reason: "No anchor found on-chain for this evidence id",
+        };
+      }
+
+      if (anchored.digest !== "0x" + currentDigest.toLowerCase()) {
+        return {
+          status: "digest_mismatch",
+          reason: "On-chain digest differs from the current digest",
+          txHash: record.txHash,
+          blockNumber: null,
+          chainId: String(network.chainId),
+          networkName: config.networkName,
+        };
+      }
+
+      // Strengthen the result with the original tx receipt when available.
+      let blockNumber: number | null = null;
+      let mined: boolean | null = null;
+      if (record.txHash) {
+        try {
+          const tx = await provider.getTransaction(record.txHash);
+          blockNumber = tx?.blockNumber ?? null;
+          const receipt = await provider.getTransactionReceipt(record.txHash);
+          mined = Number(receipt?.status) === 1;
+        } catch {
+          // Non-fatal: the on-chain digest comparison already succeeded.
+        }
+      }
+
+      if (mined === false) {
+        return {
+          status: "failed",
+          reason: "Transaction was mined but reverted (status != 0x1)",
+          txHash: record.txHash,
+          blockNumber,
+          chainId: String(network.chainId),
+          networkName: config.networkName,
+        };
+      }
+
+      return {
+        status: "verified",
+        reason: undefined,
+        txHash: record.txHash,
+        blockNumber,
+        chainId: String(network.chainId),
+        networkName: config.networkName,
+        verifiedAt: new Date().toISOString(),
+      };
+    }
+
+    // Data-carrier mode (no contract): compare transaction calldata to digest.
     const tx = await provider.getTransaction(record.txHash);
     if (!tx) {
       return { status: "failed", reason: "Transaction not found on chain" };
@@ -227,7 +320,67 @@ export async function verifyAnchorOnChain(input: {
   } catch (err: unknown) {
     return {
       status: "unavailable",
-      reason: isNetworkError(err) ? "Blockchain provider unreachable" : String((err as Error)?.message || "verification failed"),
+      reason: isNetworkError(err)
+        ? "Blockchain provider unreachable"
+        : sanitizeBlockchainErrorMessage(err),
+    };
+  }
+}
+
+/**
+ * Fetch safe, minimal information about an on-chain transaction.
+ * Returns only public metadata — never calldata content, keys, or addresses.
+ */
+export async function getTransaction(input: { txHash: string }): Promise<TransactionView> {
+  const config = getAnchorConfig();
+
+  if (!isAnchorConfigured()) {
+    return {
+      txHash: input.txHash,
+      status: "unavailable",
+      blockNumber: null,
+      mined: null,
+      chainId: config.chainId,
+      networkName: config.networkName,
+      reason: "Blockchain provider is not configured",
+    };
+  }
+
+  try {
+    const provider = new JsonRpcProvider(config.rpcUrl!);
+    const tx = await provider.getTransaction(input.txHash);
+    if (!tx) {
+      return {
+        txHash: input.txHash,
+        status: "not_found",
+        blockNumber: null,
+        mined: null,
+        chainId: config.chainId,
+        networkName: config.networkName,
+        reason: "Transaction not found on chain",
+      };
+    }
+
+    const receipt = await provider.getTransactionReceipt(input.txHash).catch(() => null);
+    return {
+      txHash: input.txHash,
+      status: "ok",
+      blockNumber: tx.blockNumber ?? null,
+      mined: receipt ? Number(receipt.status) === 1 : null,
+      chainId: config.chainId,
+      networkName: config.networkName,
+    };
+  } catch (err: unknown) {
+    return {
+      txHash: input.txHash,
+      status: "unavailable",
+      blockNumber: null,
+      mined: null,
+      chainId: config.chainId,
+      networkName: config.networkName,
+      reason: isNetworkError(err)
+        ? "Blockchain provider unreachable"
+        : sanitizeBlockchainErrorMessage(err),
     };
   }
 }
@@ -251,6 +404,22 @@ export async function anchorEvidenceOnChain(input: {
   dryRun?: boolean;
 }): Promise<AnchorSubmitResult> {
   const { scope, evidenceId, payload, digest, dryRun } = input;
+
+  // Input validation — never submit a malformed commitment.
+  if (!isValidHexDigest(digest) || !payload || typeof payload !== "string") {
+    return {
+      submitted: false,
+      status: "failed",
+      txHash: null,
+      blockNumber: null,
+      chainId: null,
+      networkName: null,
+      anchoredAt: null,
+      digest,
+      payload,
+      reason: "Invalid anchor input: digest must be a 64-character hex string and payload must be non-empty",
+    };
+  }
 
   if (dryRun) {
     return {
@@ -323,12 +492,30 @@ export async function anchorEvidenceOnChain(input: {
     }
 
     const wallet = new Wallet(config.privateKey!, provider);
-    const tx = await wallet.sendTransaction({
-      to: wallet.address,
-      value: 0,
-      data: "0x" + digest,
-      gasLimit: 60000,
-    });
+
+    // When a deployed EvidenceAnchor contract is configured for evidence
+    // anchors, write through the contract (digest + timestamp + submitter +
+    // event). Otherwise fall back to a data-carrier transaction (digest as
+    // calldata). Both are real, verifiable on-chain commitments — the
+    // contract path simply records structured integrity metadata.
+    const useContract =
+      scope === "evidence" &&
+      Boolean(config.contractAddress) &&
+      Boolean(evidenceId);
+
+    const tx = useContract
+      ? await submitEvidenceAnchor({
+          contractAddress: config.contractAddress!,
+          signer: wallet,
+          evidenceId: evidenceId!,
+          digest,
+        })
+      : await wallet.sendTransaction({
+          to: wallet.address,
+          value: 0,
+          data: "0x" + digest,
+          gasLimit: 60000,
+        });
 
     const receipt = await tx.wait();
 
@@ -364,7 +551,7 @@ export async function anchorEvidenceOnChain(input: {
   } catch (err: unknown) {
     const reason = isNetworkError(err)
       ? "Blockchain provider unreachable — no transaction was created"
-      : String((err as Error)?.message || "unknown error");
+      : sanitizeBlockchainErrorMessage(err);
     return {
       submitted: false,
       status: isNetworkError(err) ? "unavailable" : "failed",

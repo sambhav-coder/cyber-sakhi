@@ -1,10 +1,8 @@
 "use client";
 
-import React, { useState, useEffect } from "react";
+import React, { useState, useEffect, useCallback } from "react";
 import Link from "next/link";
-import { CyberSafetyBriefingModal } from "@/components/CyberSafetyBriefingModal";
 import {
-  Lock,
   Shield,
   Phone,
   AlertTriangle,
@@ -22,6 +20,7 @@ import {
   MapPin,
   EyeOff,
 } from "lucide-react";
+import { CyberSafetyBriefingModal } from "@/components/CyberSafetyBriefingModal";
 
 const BG_INTERVAL_MS = 1700;
 const BG_FADE_MS = 900;
@@ -200,7 +199,16 @@ export default function HomePage() {
   const [currentBgIndex, setCurrentBgIndex] = useState(0);
   const [mounted, setMounted] = useState(false);
   const [copied, setCopied] = useState<string | null>(null);
-  const [isBriefingOpen, setIsBriefingOpen] = useState(false);
+  const [isCyberSafetyBriefingOpen, setCyberSafetyBriefingOpen] = useState(false);
+
+  const openCyberSafetyBriefing = useCallback(
+    () => setCyberSafetyBriefingOpen(true),
+    []
+  );
+  const closeCyberSafetyBriefing = useCallback(
+    () => setCyberSafetyBriefingOpen(false),
+    []
+  );
 
   useEffect(() => {
     setMounted(true);
@@ -263,22 +271,6 @@ export default function HomePage() {
           aria-hidden
         />
       </div>
-
-      {/* =========================================================
-          ADMIN LOCK — TOP RIGHT
-          ========================================================= */}
-      <Link
-        href="/admin"
-        aria-label="Admin Panel Access"
-        className="fixed top-5 right-5 sm:top-6 sm:right-6 z-30 group"
-      >
-        <div
-          className="w-11 h-11 sm:w-12 sm:h-12 rounded-full flex items-center justify-center border border-emergency-500/30 bg-black/50 backdrop-blur-md transition-all duration-300 group-hover:border-emergency-500/70 group-hover:bg-emergency-950/60 group-hover:scale-105 animate-pulse-slow"
-          style={{ boxShadow: "0 0 22px -6px rgba(239, 68, 68, 0.4)" }}
-        >
-          <Lock className="w-4.5 h-4.5 sm:w-5 sm:h-5 text-emergency-400 group-hover:text-emergency-300 transition-colors" />
-        </div>
-      </Link>
 
       {/* =========================================================
           HERO SECTION — 100VH FULL SCREEN
@@ -361,8 +353,7 @@ export default function HomePage() {
         >
           <button
             type="button"
-            onClick={() => setIsBriefingOpen(true)}
-            aria-haspopup="dialog"
+            onClick={openCyberSafetyBriefing}
             className="group relative inline-flex items-center gap-3 px-7 sm:px-8 py-3.5 sm:py-4 rounded-xl font-bold tracking-wide text-sm sm:text-base overflow-hidden cursor-pointer"
             style={{
               background:
@@ -774,6 +765,15 @@ export default function HomePage() {
                     </Link>
                   </li>
                   <li>
+<button
+                    type="button"
+                    onClick={openCyberSafetyBriefing}
+                    className="hover:text-emergency-300 transition-colors text-left"
+                  >
+                    Cyber Safety Briefing
+                  </button>
+                  </li>
+                  <li>
                     <Link href="/companion" className="hover:text-emergency-300 transition-colors">
                       Talk to Sakhi AI
                     </Link>
@@ -813,12 +813,6 @@ export default function HomePage() {
         </div>
       </footer>
 
-      {/* Cyber Safety Briefing modal */}
-      <CyberSafetyBriefingModal
-        isOpen={isBriefingOpen}
-        onClose={() => setIsBriefingOpen(false)}
-      />
-
       {/* Global brand pulse-glow keyframes (shared) */}
       <style jsx global>{`
         @keyframes pulseGlow {
@@ -836,6 +830,12 @@ export default function HomePage() {
           }
         }
       `}</style>
+
+      {/* Cyber Safety Briefing — premium newspaper overlay over the landing page */}
+      <CyberSafetyBriefingModal
+        isOpen={isCyberSafetyBriefingOpen}
+        onClose={closeCyberSafetyBriefing}
+      />
     </div>
   );
 }

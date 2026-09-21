@@ -1,6 +1,7 @@
 import type { EvidenceRow } from "@/lib/db/types";
 import type { EvidenceItem, EvidenceLockEnvelope, EvidenceAnchorView } from "@/lib/types";
 import type { BlockchainAnchorRow } from "./db/blockchainAnchors";
+import { getAuthoritativeEvidenceDigest } from "./evidenceDigest";
 
 /**
  * Server-side serializer for evidence rows.
@@ -92,6 +93,7 @@ export function toEvidenceItem(
     fileSize: ev.file_size ?? 0,
     timestamp: ev.created_at,
     sha256Hash: ev.sha256 || "",
+    integrityDigest: getAuthoritativeEvidenceDigest(ev),
     category: (ev.category as EvidenceItem["category"]) || "OTHER",
     notes: ev.description ?? undefined,
     integrityVerified: meta.integrityVerified,
@@ -131,6 +133,7 @@ export function toMaskedEvidenceItem(
     fileSize: 0,     // masked
     timestamp: ev.created_at,
     sha256Hash: "",  // masked
+    integrityDigest: "", // masked
     category: "OTHER", // masked
     notes: undefined, // masked
     integrityVerified: meta.integrityVerified,

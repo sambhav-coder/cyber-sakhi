@@ -1,0 +1,1 @@
+{"ngrams": [1, 2], "sublinear_tf": true, "smooth_idf": true, "norm": "l2", "min_df": 2, "max_df": 0.9, "max_features": 60000, "C": 1.0, "class_weight": "balanced", "solver": "lbfgs", "multi_class": "multinomial", "max_iter": 2000}

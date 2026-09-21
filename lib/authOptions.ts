@@ -52,6 +52,8 @@ export const authOptions: NextAuthOptions = {
   // If not set, NextAuth will attempt to infer it from the request
   providers: [
     // 1. Google OAuth Provider (signup only — the login page does not list it)
+    // Note: Demo values are non-functional placeholders. In production, set real
+    // GOOGLE_CLIENT_ID and GOOGLE_CLIENT_SECRET in environment variables.
     GoogleProvider({
       clientId: process.env.GOOGLE_CLIENT_ID || "demo-google-client-id",
       clientSecret: process.env.GOOGLE_CLIENT_SECRET || "demo-google-client-secret",
@@ -198,5 +200,16 @@ console.log("[NextAuth Config] Environment check:", {
   hasNextAuthSecret: !!process.env.NEXTAUTH_SECRET,
   hasNextAuthUrl: !!process.env.NEXTAUTH_URL,
   hasGoogleClientId: !!process.env.GOOGLE_CLIENT_ID,
+  hasGoogleClientSecret: !!process.env.GOOGLE_CLIENT_SECRET,
   nodeEnv: process.env.NODE_ENV,
 });
+
+// Production security check: warn if demo credentials are still in use
+if (process.env.NODE_ENV === "production") {
+  if (!process.env.GOOGLE_CLIENT_ID || process.env.GOOGLE_CLIENT_ID === "demo-google-client-id") {
+    console.warn("[NextAuth Config] WARNING: GOOGLE_CLIENT_ID is not configured in production. Google OAuth will not work.");
+  }
+  if (!process.env.GOOGLE_CLIENT_SECRET || process.env.GOOGLE_CLIENT_SECRET === "demo-google-client-secret") {
+    console.warn("[NextAuth Config] WARNING: GOOGLE_CLIENT_SECRET is not configured in production. Google OAuth will not work.");
+  }
+}

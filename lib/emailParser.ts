@@ -2,6 +2,7 @@ import {
   EmailHeaderAnalysis,
   SMTPHop,
 } from "./emailTypes";
+import { extractValidatedIps } from "./ip";
 
 export function getHeaderValue(rawHeaders: string, headerName: string): string | undefined {
   const regex = new RegExp(
@@ -150,16 +151,15 @@ function parseDateIso(timestamp: string | undefined): {
   };
 }
 
+/**
+ * Extract a validated IP address from header text.
+ *
+ * Only strings that pass strict IPv4/IPv6 validation are returned: a
+ * timestamp such as "07:08:55" or a malformed quad like "09.17.02.11" is
+ * NEVER an IP. Returns the first valid address found, or undefined.
+ */
 function extractIp(value: string): string | undefined {
-  const ipv4 =
-    value.match(/\b(?:\d{1,3}\.){3}\d{1,3}\b/)?.[0];
-
-  if (ipv4) return ipv4;
-
-  const ipv6 =
-    value.match(/\b(?:[0-9a-f]{1,4}:){2,7}[0-9a-f]{1,4}\b/i)?.[0];
-
-  return ipv6;
+  return extractValidatedIps(value)[0];
 }
 
 export function reconstructSMTPPath(

@@ -29,6 +29,7 @@ import {
   HardDrive,
   KeySquare,
   Radar,
+  ExternalLink,
 } from "lucide-react";
 import { clsx } from "clsx";
 import { twMerge } from "tailwind-merge";
@@ -146,7 +147,7 @@ const FALLBACK_SYSTEM: SystemStatus = {
   },
   blockchainAnchor: {
     key: "blockchain-anchor",
-    label: "Blockchain Anchor Registry",
+    label: "Blockchain Anchor (EVM) — not configured",
     status: "unavailable",
   },
 };
@@ -326,6 +327,29 @@ export default function EvidenceLockerPage() {
 
   // Blockchain anchor state per evidence item
   const [anchorBusyId, setAnchorBusyId] = useState<string | null>(null);
+
+  // Safe provider metadata (configured/enabled/network/chain/contract — never
+  // private keys) surfaced from the anchor endpoints for the Integrity card.
+  const [anchorProviderMeta, setAnchorProviderMeta] = useState<{
+    configured: boolean;
+    enabled: boolean;
+    networkName: string | null;
+    chainId: string | null;
+    contractAddress: string | null;
+  } | null>(null);
+
+  // Per-item verification results for inline ✓/⚠ on the Integrity card.
+  const [verifyResults, setVerifyResults] = useState<
+    Record<
+      string,
+      {
+        status?: string | null;
+        reason?: string | null;
+        verifiedAt?: string | null;
+        blockNumber?: number | null;
+      }
+    >
+  >({});
 
   const showToast = useCallback(
     (kind: "success" | "error" | "info", text: string) => {
@@ -1035,6 +1059,15 @@ export default function EvidenceLockerPage() {
       );
       if (!res.ok) return;
       const data = await res.json();
+      if (data.providerMeta) {
+        setAnchorProviderMeta({
+          configured: Boolean(data.providerMeta.configured),
+          enabled: Boolean(data.providerMeta.enabled),
+          networkName: data.providerMeta.networkName || null,
+          chainId: data.providerMeta.chainId || null,
+          contractAddress: data.providerMeta.contractAddress || null,
+        });
+      }
       const anchor = data.anchor
         ? {
             anchorId: data.anchor.id,
@@ -1100,6 +1133,15 @@ export default function EvidenceLockerPage() {
           data.error || "Anchor attempt failed"
         );
       }
+      if (data.providerMeta) {
+        setAnchorProviderMeta({
+          configured: Boolean(data.providerMeta.configured),
+          enabled: Boolean(data.providerMeta.enabled),
+          networkName: data.providerMeta.networkName || null,
+          chainId: data.providerMeta.chainId || null,
+          contractAddress: data.providerMeta.contractAddress || null,
+        });
+      }
       const a = data.anchor;
       if (a?.submitted) {
         showToast(
@@ -1143,7 +1185,27 @@ export default function EvidenceLockerPage() {
       if (!res.ok) {
         throw new Error(data.error || "Verification failed");
       }
+      if (data.providerMeta) {
+        setAnchorProviderMeta({
+          configured: Boolean(data.providerMeta.configured),
+          enabled: Boolean(data.providerMeta.enabled),
+          networkName: data.providerMeta.networkName || null,
+          chainId: data.providerMeta.chainId || null,
+          contractAddress: data.providerMeta.contractAddress || null,
+        });
+      }
       const v = data.verification;
+      if (v) {
+        setVerifyResults((prev) => ({
+          ...prev,
+          [item.id]: {
+            status: v.status ?? null,
+            reason: v.reason ?? null,
+            verifiedAt: v.verifiedAt ?? null,
+            blockNumber: v.blockNumber ?? null,
+          },
+        }));
+      }
       if (!v) {
         showToast("info", "No blockchain anchor exists for this artifact.");
       } else if (v.status === "verified") {
@@ -1281,6 +1343,23 @@ export default function EvidenceLockerPage() {
     setTimeout(() => setCopiedHashId(null), 2500);
   };
 
+  /** Real block-explorer link for a confirmed tx hash, keyed off the chain id. */
+  const etherscanTxUrl = (txHash: string | null | undefined, chainId?: string | null) => {
+    if (!txHash) return null;
+    const chain = String(chainId || anchorProviderMeta?.chainId || "");
+    const subdomain =
+      chain === "11155111"
+        ? "sepolia."
+        : chain === "5"
+        ? "goerli."
+        : chain === "1"
+        ? ""
+        : chain
+        ? `${chain}.`
+        : "sepolia.";
+    return `https://${subdomain}etherscan.io/tx/${txHash}`;
+  };
+
   const handleDownloadDecrypted = async () => {
     if (!detailsItem || !details.decryptedBytes) return;
     const blob = uint8ArrayToBlob(details.decryptedBytes, detailsItem.fileType);
@@ -1315,9 +1394,11 @@ Local Crypto Chain          : ${consoleStatus.integrityProvider?.status === "act
 Blockchain Anchor           : ${anchorStatus} (${consoleStatus.blockchainAnchor?.label || "—"})
 
 This report lists the artifacts held in this vault with their immutable
-cryptographic fingerprints and recorded chain-of-custody events. External
-blockchain anchoring is not connected; integrity rests on the client-side
-SHA-256 fingerprint and the tamper-evident local hash chain.
+cryptographic fingerprints and recorded chain-of-custody events. ${
+      anchorStatus === "CONNECTED"
+        ? "Evidence digests are committed to a real blockchain via data-carrier transactions and are independently verifiable on-chain."
+        : "External blockchain anchoring is not connected; integrity rests on the client-side SHA-256 fingerprint and the tamper-evident local hash chain."
+    }
 
 EVIDENCE LEDGER:
 --------------------------------------------------------------------------------
@@ -2399,8 +2480,11 @@ and custody history maintained by Cyber Sakhi.
 
             <div className="rounded-xl border border-slate-800 bg-slate-900/50 p-3 text-[11px] text-slate-400 space-y-2">
               <div className="flex items-center gap-2 text-slate-200 font-bold">
-                <Radar className="w-3.5 h-3.5 text-sky-400" />
-                Blockchain Anchor
+                <ShieldCheck className="w-3.5 h-3.5 text-emerald-400" />
+                Blockchain Integrity
+                <span className="italic font-normal text-slate-500 decoration-slate-600 underline underline-offset-2 text-[10px]">
+                  SHA-256 &rarr; Ethereum &rarr; EvidenceAnchor
+                </span>
                 {detailsItem.anchor?.anchorStatus ? (
                   <span
                     className={cn(
@@ -2411,6 +2495,8 @@ and custody history maintained by Cyber Sakhi.
                         : detailsItem.anchor.anchorStatus === "digest_mismatch" ||
                           detailsItem.anchor.anchorStatus === "failed"
                         ? "bg-red-950/50 text-red-300 border-red-800/70"
+                        : detailsItem.anchor.anchorStatus === "unavailable"
+                        ? "bg-slate-800 text-slate-300 border-slate-700"
                         : "bg-amber-950/50 text-amber-300 border-amber-700/60"
                     )}
                   >
@@ -2421,27 +2507,100 @@ and custody history maintained by Cyber Sakhi.
                 ) : null}
               </div>
               {detailsItem.anchor?.txHash ? (
-                <div className="space-y-1 font-mono">
+                <div className="space-y-1.5 font-mono">
+                  <div className="flex items-center gap-2">
+                    <span className="text-slate-500 shrink-0">Network:</span>
+                    <span>
+                      {detailsItem.anchor.networkName ||
+                        anchorProviderMeta?.networkName ||
+                        "Ethereum"}
+                    </span>
+                    {detailsItem.anchor.chainId && (
+                      <span className="text-slate-500">
+                        (chain {detailsItem.anchor.chainId})
+                      </span>
+                    )}
+                  </div>
+                  <div className="flex items-start gap-2">
+                    <span className="text-slate-500 shrink-0">Anchor:</span>
+                    <span className="break-all">
+                      {"0x" +
+                        (detailsItem.anchor.digest || "").substring(0, 20) +
+                        "…" +
+                        (detailsItem.anchor.digest || "").slice(-8)}
+                    </span>
+                    {detailsItem.anchor.digest && (
+                      <button
+                        onClick={() =>
+                          copyHash(
+                            `0x${detailsItem.anchor?.digest || ""}`,
+                            `${detailsItem.id}:digest`
+                          )
+                        }
+                        className="text-slate-500 hover:text-sky-300 transition shrink-0"
+                        title="Copy on-chain digest"
+                        aria-label="Copy on-chain digest"
+                      >
+                        <Copy className="w-3.5 h-3.5" />
+                      </button>
+                    )}
+                  </div>
                   <div className="flex items-start gap-2">
                     <span className="text-slate-500 shrink-0">Tx hash:</span>
                     <span className="break-all text-sky-300">
-                      {detailsItem.anchor.txHash}
+                      {detailsItem.anchor.txHash.substring(0, 24)}…{detailsItem.anchor.txHash.slice(-8)}
                     </span>
+                    <button
+                      onClick={() =>
+                        copyHash(
+                          detailsItem.anchor?.txHash || "",
+                          `${detailsItem.id}:tx`
+                        )
+                      }
+                      className="text-slate-500 hover:text-sky-300 transition shrink-0"
+                      title="Copy transaction hash"
+                      aria-label="Copy transaction hash"
+                    >
+                      <Copy className="w-3.5 h-3.5" />
+                    </button>
+                    {etherscanTxUrl(detailsItem.anchor.txHash, detailsItem.anchor.chainId) && (
+                      <a
+                        href={etherscanTxUrl(detailsItem.anchor.txHash, detailsItem.anchor.chainId)!}
+                        target="_blank"
+                        rel="noopener noreferrer"
+                        className="inline-flex items-center gap-1 text-emerald-300 hover:text-emerald-200 font-semibold shrink-0"
+                        title="View on Etherscan"
+                      >
+                        <ExternalLink className="w-3.5 h-3.5" />
+                        Etherscan
+                      </a>
+                    )}
                   </div>
                   <div className="flex items-start gap-2">
                     <span className="text-slate-500 shrink-0">Block:</span>
                     <span>{detailsItem.anchor.blockNumber ?? "—"}</span>
-                    <span className="text-slate-500">Network:</span>
-                    <span>
-                      {detailsItem.anchor.networkName || detailsItem.anchor.chainId || "—"}
-                    </span>
                   </div>
-                  <div className="flex items-start gap-2">
-                    <span className="text-slate-500 shrink-0">Digest:</span>
-                    <span className="break-all">
-                      {detailsItem.anchor.digest?.substring(0, 40) || "—"}…
-                    </span>
-                  </div>
+                  {anchorProviderMeta?.contractAddress && (
+                    <div className="flex items-start gap-2">
+                      <span className="text-slate-500 shrink-0">Contract:</span>
+                      <span className="break-all">
+                        {anchorProviderMeta.contractAddress.substring(0, 16)}…{anchorProviderMeta.contractAddress.slice(-6)}
+                      </span>
+                      <button
+                        onClick={() =>
+                          copyHash(
+                            anchorProviderMeta.contractAddress || "",
+                            `${detailsItem.id}:contract`
+                          )
+                        }
+                        className="text-slate-500 hover:text-sky-300 transition shrink-0"
+                        title="Copy contract address"
+                        aria-label="Copy contract address"
+                      >
+                        <Copy className="w-3.5 h-3.5" />
+                      </button>
+                    </div>
+                  )}
                   {detailsItem.anchor.anchoredAt && (
                     <div className="flex items-start gap-2">
                       <span className="text-slate-500 shrink-0">Anchored:</span>
@@ -2463,6 +2622,38 @@ and custody history maintained by Cyber Sakhi.
                   is confirmed.
                 </p>
               )}
+              {detailsItem.anchor?.txHash &&
+                anchorProviderMeta &&
+                !anchorProviderMeta.configured && (
+                  <p className="rounded-lg bg-amber-950/40 border border-amber-800/40 px-2 py-1.5 text-amber-300 leading-relaxed">
+                    Blockchain provider is not currently configured — on-chain
+                    verification is unavailable and the status above reflects
+                    the last recorded anchor.
+                  </p>
+                )}
+              {detailsItem.anchor?.txHash && verifyResults[detailsItem.id] ? (
+                verifyResults[detailsItem.id].status === "verified" ? (
+                  <p className="rounded-lg bg-emerald-950/40 border border-emerald-800/40 px-2 py-1.5 text-emerald-300 leading-relaxed">
+                    <CheckCircle2 className="inline w-3.5 h-3.5 mr-1" />
+                    Anchor VERIFIED on-chain — the committed digest matches this
+                    artifact.
+                    {verifyResults[detailsItem.id].blockNumber
+                      ? ` Block ${verifyResults[detailsItem.id].blockNumber}.`
+                      : ""}
+                    {verifyResults[detailsItem.id].verifiedAt
+                      ? ` Verified ${new Date(
+                          verifyResults[detailsItem.id].verifiedAt as string
+                        ).toLocaleString()}.`
+                      : ""}
+                  </p>
+                ) : (
+                  <p className="rounded-lg bg-red-950/40 border border-red-800/40 px-2 py-1.5 text-red-300 leading-relaxed">
+                    <AlertTriangle className="inline w-3.5 h-3.5 mr-1" />
+                    {verifyResults[detailsItem.id].reason ||
+                      "On-chain verification could not be confirmed."}
+                  </p>
+                )
+              ) : null}
               <div className="flex items-center gap-2 flex-wrap pt-1">
                 <button
                   onClick={() => handleAnchorEvidence(detailsItem)}
@@ -2485,7 +2676,7 @@ and custody history maintained by Cyber Sakhi.
                     className="inline-flex items-center gap-1.5 text-[11px] font-semibold text-emerald-300 hover:text-emerald-200 px-2.5 py-1.5 rounded-lg bg-slate-900 border border-slate-800 hover:border-emerald-700/50 transition disabled:opacity-50"
                   >
                     <ShieldCheck className="w-3.5 h-3.5" />
-                    Verify On-Chain
+                    Verify Integrity
                   </button>
                 )}
               </div>

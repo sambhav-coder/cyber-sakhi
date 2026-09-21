@@ -25,6 +25,13 @@ function cn(...inputs: Parameters<typeof clsx>) {
 
 const PUBLIC_PATHS = new Set(["/", "/login", "/signup", "/privacy", "/recover"]);
 
+// The Government Portal (/gov/*) is a completely separate surface: it has its
+// own layout, chrome, and (later) its own session foundation. It must never
+// render inside the public product shell (sidebar + top bar), so it is treated
+// like the public self-contained routes here. Middleware does not protect /gov
+// yet, which is correct for this UI-only foundation phase.
+const GOV_PORTAL_PREFIX = "/gov";
+
 const TopBar: React.FC<{ onOpenSidebar: () => void; sidebarCollapsed: boolean }> = ({
   onOpenSidebar,
   sidebarCollapsed,
@@ -293,7 +300,9 @@ interface AppShellProps {
 export const AppShell: React.FC<AppShellProps> = ({ children }) => {
   const pathname = usePathname();
   const isPublicRoute =
-    PUBLIC_PATHS.has(pathname) || pathname.startsWith("/recover/");
+    PUBLIC_PATHS.has(pathname) ||
+    pathname.startsWith("/recover/") ||
+    pathname.startsWith(GOV_PORTAL_PREFIX);
 
   const [isMobileOpen, setIsMobileOpen] = useState(false);
   const [collapsed, setCollapsed] = useState(false);

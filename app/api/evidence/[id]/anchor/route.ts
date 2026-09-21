@@ -29,6 +29,8 @@ import {
   getSafeProviderMeta,
 } from "@/lib/blockchain/anchor";
 import { computeCustodyRoot } from "@/lib/db/chainOfCustody";
+import { getCanonicalEvidenceDigest } from "@/lib/evidenceDigest";
+import { sanitizeBlockchainErrorMessage } from "@/lib/blockchain/errorSanitizer";
 
 export async function POST(
   req: NextRequest,
@@ -52,16 +54,25 @@ export async function POST(
     const body = (await req.json().catch(() => ({}))) || {};
     const dryRun = body.dryRun === true;
 
-    // Compute custody root
+    // Custody root — audit-only metadata on the anchor record. Deliberately NOT
+    // included in the committed digest (the custody chain is mutable, so it
+    // would break verification of unchanged evidence).
     const events = await listChainOfCustody(evidenceId);
     const custodyRoot = computeCustodyRoot(events);
 
-    // Build deterministic payload + digest
-    const { payload, digest } = buildEvidenceAnchorPayload({
-      evidenceId,
+    // The canonical evidence digest — the single commitment used by BOTH this
+    // anchor path and the verify path (getCanonicalEvidenceDigest). It is a
+    // pure function of the stored evidence bytes and never depends on the
+    // mutable custody chain, so an unchanged evidence always reproduces the
+    // same digest and verification passes for a real cryptographic match.
+    const canonicalDigest = getCanonicalEvidenceDigest({
+      encryptedContent: evidence.encrypted_content,
+      sha256: evidence.sha256,
+      metadata: evidence.metadata,
+    });
+    const { payload } = buildEvidenceAnchorPayload({
       evidenceCode: evidence.evidence_code || evidenceId,
-      sha256Hash: evidence.sha256 || "",
-      custodyRootHash: custodyRoot,
+      sha256Hash: canonicalDigest,
     });
 
     if (dryRun) {
@@ -69,7 +80,7 @@ export async function POST(
         anchor: {
           submitted: false,
           status: "not_created",
-          digest,
+          digest: canonicalDigest,
           payloadPrefix: payload.substring(0, 80) + (payload.length > 80 ? "..." : ""),
           providerMeta: getSafeProviderMeta(),
         },
@@ -77,17 +88,40 @@ export async function POST(
       });
     }
 
+    // Idempotency: if a confirmed anchor with this exact canonical digest
+    // already exists, reuse it instead of submitting a duplicate transaction
+    // for logically identical evidence state.
+    const existing = await getLatestAnchorForEvidence(evidenceId, "evidence");
+    if (existing && existing.status === "confirmed" && existing.anchored_digest === canonicalDigest) {
+      return NextResponse.json({
+        message: "Evidence is already anchored with this exact digest — no new transaction created",
+        anchor: {
+          anchorId: existing.id,
+          status: existing.status,
+          submitted: false,
+          txHash: existing.tx_hash,
+          blockNumber: existing.block_number,
+          chainId: existing.chain_id,
+          networkName: existing.network_name,
+          anchoredAt: existing.anchored_at,
+          digest: canonicalDigest,
+          reason: "An identical confirmed anchor already exists",
+        },
+        providerMeta: getSafeProviderMeta(),
+      });
+    }
+
     // Create anchor record (status = 'pending' initially)
     const anchorRecord = await createBlockchainAnchor({
       evidenceId,
       anchorType: "evidence",
-      anchorVersion: 1,
+      anchorVersion: 2,
       provider: getSafeProviderMeta().provider,
       networkName: getSafeProviderMeta().networkName,
       chainId: getSafeProviderMeta().chainId,
       payload,
-      digest,
-      payloadMetadata: { custodyRoot, sha256Hash: evidence.sha256 },
+      digest: canonicalDigest,
+      payloadMetadata: { custodyRoot, sha256Hash: canonicalDigest },
     });
 
     // Attempt real EVM transaction
@@ -95,7 +129,7 @@ export async function POST(
       scope: "evidence",
       evidenceId,
       payload,
-      digest,
+      digest: canonicalDigest,
     });
 
     // Update anchor record with actual tx result
@@ -141,7 +175,7 @@ export async function POST(
         chainId: result.chainId,
         networkName: result.networkName,
         anchoredAt: result.anchoredAt,
-        digest,
+        digest: canonicalDigest,
         reason: result.reason,
       },
       providerMeta: getSafeProviderMeta(),
@@ -150,7 +184,10 @@ export async function POST(
     console.error("Evidence anchor error:", error);
     return NextResponse.json(
       {
-        error: error instanceof Error ? error.message : "Failed to anchor evidence",
+        error:
+          error instanceof Error
+            ? sanitizeBlockchainErrorMessage(error)
+            : "Failed to anchor evidence",
       },
       { status: 500 }
     );
@@ -176,7 +213,10 @@ export async function GET(
       );
     }
 
-    const anchor = await getLatestAnchorForEvidence(evidenceId);
+    // Verify against the EVIDENCE anchor for THIS evidence id, never against a
+    // different anchor record (batch/custody-chain anchors are excluded by the
+    // anchor_type filter below).
+    const anchor = await getLatestAnchorForEvidence(evidenceId, "evidence");
     if (!anchor) {
       return NextResponse.json({
         anchor: null,
@@ -191,13 +231,14 @@ export async function GET(
 
     let verification = null;
     if (verify) {
-      const events = await listChainOfCustody(evidenceId);
-      const custodyRoot = computeCustodyRoot(events);
-      const { digest: currentDigest } = buildEvidenceAnchorPayload({
-        evidenceId,
-        evidenceCode: evidence.evidence_code || evidenceId,
-        sha256Hash: evidence.sha256 || "",
-        custodyRootHash: custodyRoot,
+      // Recompute the canonical digest from the CURRENT stored bytes. This is
+      // the exact same canonicalization used at anchor time, so unchanged
+      // evidence reproduces the committed digest while modified evidence
+      // produces a different digest and fails verification.
+      const currentDigest = getCanonicalEvidenceDigest({
+        encryptedContent: evidence.encrypted_content,
+        sha256: evidence.sha256,
+        metadata: evidence.metadata,
       });
 
       verification = await verifyAnchorOnChain({
@@ -207,6 +248,7 @@ export async function GET(
           chainId: anchor.chain_id,
         },
         currentDigest,
+        evidenceId,
       });
 
       // Update status if verification found mismatch
@@ -237,7 +279,10 @@ export async function GET(
     console.error("Evidence anchor status error:", error);
     return NextResponse.json(
       {
-        error: error instanceof Error ? error.message : "Failed to retrieve anchor status",
+        error:
+          error instanceof Error
+            ? sanitizeBlockchainErrorMessage(error)
+            : "Failed to retrieve anchor status",
       },
       { status: 500 }
     );

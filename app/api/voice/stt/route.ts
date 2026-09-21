@@ -20,6 +20,11 @@ import { localSttAvailable, localSttTranscribe } from "@/lib/voice/localPiper";
  */
 export async function POST(req: NextRequest) {
   try {
+    const session = await getServerSession(authOptions);
+    if (!session?.user?.id) {
+      return NextResponse.json({ error: "Unauthorized" }, { status: 401 });
+    }
+
     const ct = req.headers.get("content-type") || "";
     let audioB64 = "";
     let language = "auto";

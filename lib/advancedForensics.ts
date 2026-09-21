@@ -550,6 +550,8 @@ export function buildStructuredFindings(input: {
     technicalEvidence: string;
     humanExplanation: string;
     recommendedAction: string;
+    validationStatus?: string;
+    benignExplanation?: string;
   }): ForensicFinding => partial as ForensicFinding;
 
   const { authentication: auth } = input;
@@ -584,6 +586,14 @@ export function buildStructuredFindings(input: {
         status === "fail"
           ? "Treat the sender identity as unverified. Verify through an independent known channel before acting."
           : "No action required for this check by itself.",
+      validationStatus:
+        status === "pass" || status === "fail"
+          ? "Header Claim"
+          : "Validation Unavailable",
+      benignExplanation:
+        status === "fail"
+          ? "A failed or missing check can also appear on legitimate but misconfigured senders, or right after a domain migration — treat it as a strong signal, not proof of fraud."
+          : undefined,
     }));
   }
 
@@ -600,6 +610,9 @@ export function buildStructuredFindings(input: {
         "The email presents a sender identity that does not match its real addressing or domain. This is a classic way attackers impersonate trusted organizations.",
       recommendedAction:
         "Do not trust the visible sender. Verify via a known, separate channel (official app, website, phone number).",
+      validationStatus: "Independent Domain Comparison",
+      benignExplanation:
+        "Display-name and domain mismatches also appear in legitimate bulk-marketing systems that send on behalf of brands; verify through a trusted channel before acting.",
     }));
   }
 
@@ -621,6 +634,11 @@ export function buildStructuredFindings(input: {
         a.type === "timestamp_inconsistency"
           ? "Preserve the raw email untouched as evidence before anything else."
           : "No action required on this signal alone.",
+      validationStatus: "Route Reconstructed",
+      benignExplanation:
+        a.type === "timestamp_inconsistency"
+          ? "Timestamp quirks can also come from clock drift on legitimate mail servers — preserve evidence, but do not conclude fraud from this alone."
+          : "Unusual routing can occur with legitimate relaying configurations.",
     }));
   }
 
@@ -641,6 +659,9 @@ export function buildStructuredFindings(input: {
         "This email uses language designed to pressure or scare you into acting quickly — urgency, threats to your account, or requests to hand over credentials. These are common manipulation techniques.",
       recommendedAction:
         "Slow down. Never enter passwords, OTPs, CVV or bank details from a link in an unexpected email.",
+      validationStatus: "Keyword Pattern Match",
+      benignExplanation:
+        "Urgent language is also used by legitimate services during real account alerts; a trigger is a lure signal, not proof of fraud.",
     }));
   }
 
@@ -657,6 +678,9 @@ export function buildStructuredFindings(input: {
         "Links in this email point to addresses that resemble trusted sites but are hosted on cheap, disposable domains or raw IP addresses.",
       recommendedAction:
         "Do not click any links. If you must visit the service, type the official address yourself in a fresh browser tab.",
+      validationStatus: "Shape Analysis Only",
+      benignExplanation:
+        "Shortened or unusual links also appear in legitimate newsletters and marketing campaigns — shape analysis is a signal, not a conclusion.",
     }));
   }
 
@@ -674,6 +698,9 @@ export function buildStructuredFindings(input: {
         "Attachments that run code (executables, scripts) or hide a second extension can install malware. Macro-enabled office files can execute code when opened.",
       recommendedAction:
         "Do not open the attachment. Report the email instead.",
+      validationStatus: "Structural Analysis",
+      benignExplanation:
+        "Double extensions and archive attachments also occur in legitimate business documents; treat this as a strong signal but verify the sender before concluding.",
     }));
   }
 
@@ -690,6 +717,9 @@ export function buildStructuredFindings(input: {
         "Legitimate banks and government bodies rarely use cheap, unregulated top-level domains for their official mail.",
       recommendedAction:
         "Treat any request from this domain as unverified regardless of branding in the email.",
+      validationStatus: "Heuristic Vetting",
+      benignExplanation:
+        "Uncommon TLDs are also used by some legitimate startups — treat this as a supporting signal, not a standalone verdict.",
     }));
   }
 
@@ -706,6 +736,9 @@ export function buildStructuredFindings(input: {
         "We could not determine where on the internet this email actually originated, which limits how much of its route we can verify.",
       recommendedAction:
         "Nothing to act on directly; the missing origin is itself worth noting for evidence quality.",
+      validationStatus: "Route Reconstruction",
+      benignExplanation:
+        "Some legitimate relays strip or obfuscate internal hops, so a missing public origin is a quality note, not proof of manipulation.",
     }));
   }
 
@@ -721,6 +754,8 @@ export function buildScoreBreakdown(input: {
   spoofingGroupPoints: number;
   spoofingSignals: number;
   phishingAdjusted: number;
+  mlPoints?: number;
+  becPoints?: number;
   smtpHighAnomalies: number;
   smtpMediumAnomalies: number;
   urlSuspiciousCount: number;
@@ -746,6 +781,14 @@ export function buildScoreBreakdown(input: {
 
   if (input.phishingAdjusted > 0) {
     groups.push({ group: "NLP_CONTENT", points: input.phishingAdjusted, reason: "social-engineering keyword score x0.4" });
+  }
+
+  if (input.mlPoints && input.mlPoints > 0) {
+    groups.push({ group: "ML_CLASSIFIER", points: Math.round(input.mlPoints), reason: "trained classifier score scaled by model probability" });
+  }
+
+  if (input.becPoints && input.becPoints > 0) {
+    groups.push({ group: "BEC", points: Math.round(input.becPoints), reason: "business email compromise behavioural patterns (capped +30)" });
   }
 
   const smtpPoints = Math.min(10, input.smtpHighAnomalies * 5 + input.smtpMediumAnomalies * 2);
@@ -839,9 +882,50 @@ export const CATEGORY_LABELS: Record<ForensicCategory, string> = {
   SMTP_ROUTING: "SMTP Routing",
   URL: "Link Analysis",
   ATTACHMENT: "Attachment Analysis",
-  NLP_SOCIAL_ENGINEERING: "Social Engineering",
+  NLP_SOCIAL_ENGINEERING: "Content Risk",
   THREAT_INTELLIGENCE: "Threat Intelligence",
   ANOMALY: "Anomaly",
 };
+
+// ---------------------------------------------------------------------------
+// Deduplication + id normalization for structured findings (INSEQ hygiene).
+// Structurally identical findings (same category + normalized description with
+// the same severity) are collapsed, keeping the highest-confidence instance.
+// ---------------------------------------------------------------------------
+
+export function normalizeFindingText(s: string): string {
+  return s
+    .toLowerCase()
+    .replace(/[^a-z0-9]+/g, " ")
+    .trim()
+    .replace(/with (probability|confidence)[^.]*\.?/g, "")
+    .trim();
+}
+
+export function dedupeFindings(findings: ForensicFinding[]): ForensicFinding[] {
+  const byKey = new Map<string, ForensicFinding>();
+  for (const f of findings) {
+    const key = `${f.category}::${normalizeFindingText(f.description)}::${f.severity}`;
+    const existing = byKey.get(key);
+    if (!existing || (f.confidence ?? 0) > (existing.confidence ?? 0)) {
+      byKey.set(key, f);
+    }
+  }
+  return [...byKey.values()];
+}
+
+/**
+ * Reassign clean, stable, sequential identifiers (FND-<category>-<n>) and
+ * deduplicate. The INSEQ pipeline previously produced random-id findings that
+ * could not be referenced deterministically across persisted cases.
+ */
+export function normalizeFindings(findings: ForensicFinding[]): ForensicFinding[] {
+  const counters = new Map<string, number>();
+  return dedupeFindings(findings).map((f) => {
+    const n = (counters.get(f.category) ?? 0) + 1;
+    counters.set(f.category, n);
+    return { ...f, id: `FND-${f.category}-${n}` };
+  });
+}
 
 export { levenshtein };

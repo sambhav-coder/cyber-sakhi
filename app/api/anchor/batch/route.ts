@@ -14,11 +14,10 @@ import { NextRequest, NextResponse } from "next/server";
 import { getServerSession } from "next-auth";
 import { authOptions } from "@/lib/authOptions";
 import { getEvidenceById } from "@/lib/db/evidence";
-import { listChainOfCustody } from "@/lib/db/chainOfCustody";
 import { getLatestAnchorForEvidence, createBlockchainAnchor, updateBlockchainAnchor } from "@/lib/db/blockchainAnchors";
-import { computeCustodyRoot } from "@/lib/db/chainOfCustody";
+import { getCanonicalEvidenceDigest } from "@/lib/evidenceDigest";
+import { sanitizeBlockchainErrorMessage } from "@/lib/blockchain/errorSanitizer";
 import {
-  buildEvidenceAnchorPayload,
   buildBatchAnchorPayload,
   anchorEvidenceOnChain,
   getSafeProviderMeta,
@@ -56,16 +55,15 @@ export async function POST(req: NextRequest) {
       const ev = await getEvidenceById(eid, session.user.id);
       if (!ev) continue; // skip unauthorized items silently
 
-      const events = await listChainOfCustody(eid);
-      const custodyRoot = computeCustodyRoot(events);
-      const { digest } = buildEvidenceAnchorPayload({
-        evidenceId: eid,
-        evidenceCode: ev.evidence_code || eid,
-        sha256Hash: ev.sha256 || "",
-        custodyRootHash: custodyRoot,
-      });
-
-      evidenceDigests.push(digest);
+      // Batch leaves are the canonical evidence digests (the same digest used
+      // for single-evidence anchors and verification).
+      evidenceDigests.push(
+        getCanonicalEvidenceDigest({
+          encryptedContent: ev.encrypted_content,
+          sha256: ev.sha256,
+          metadata: ev.metadata,
+        })
+      );
       verifiedIds.push(eid);
     }
 
@@ -153,7 +151,10 @@ export async function POST(req: NextRequest) {
     console.error("Batch anchor error:", error);
     return NextResponse.json(
       {
-        error: error instanceof Error ? error.message : "Failed to batch anchor",
+        error:
+          error instanceof Error
+            ? sanitizeBlockchainErrorMessage(error)
+            : "Failed to batch anchor",
       },
       { status: 500 }
     );
@@ -199,7 +200,10 @@ export async function GET(req: NextRequest) {
     console.error("Batch anchor status error:", error);
     return NextResponse.json(
       {
-        error: error instanceof Error ? error.message : "Failed to retrieve batch anchor status",
+        error:
+          error instanceof Error
+            ? sanitizeBlockchainErrorMessage(error)
+            : "Failed to retrieve batch anchor status",
       },
       { status: 500 }
     );

@@ -10,12 +10,8 @@ import {
   ArrowRight,
   ShieldCheck,
   AlertCircle,
-  Sparkles,
   KeyRound,
-  UserCheck,
-  ShieldAlert,
   Fingerprint,
-  Copy,
   Check,
 } from "lucide-react";
 
@@ -37,7 +33,6 @@ function LoginForm() {
       ? "This Google account is already registered. Please log in with your Sakhi Number and password."
       : null
   );
-  const [sakhiCopied, setSakhiCopied] = useState(false);
 
   const handleCredentialsLogin = async (e: React.FormEvent) => {
     e.preventDefault();
@@ -69,12 +64,6 @@ function LoginForm() {
     }
   };
 
-  const fillCredentials = (demoIdentifier: string, demoPass: string) => {
-    setIdentifier(demoIdentifier);
-    setPassword(demoPass);
-    setErrorMessage(null);
-  };
-
   return (
     <div className="min-h-screen w-full relative flex items-center justify-center px-4 sm:px-6 py-10 overflow-hidden">
       {/* Ambient bg */}
@@ -103,13 +92,6 @@ function LoginForm() {
           >
             <ArrowRight className="w-3 h-3 rotate-180" />
             Back to Home
-          </Link>
-          <Link
-            href="/admin"
-            className="flex items-center gap-1.5 text-[11px] text-slate-500 hover:text-emergency-300 transition-colors"
-          >
-            <Lock className="w-3 h-3" />
-            Admin
           </Link>
         </div>
 
@@ -267,67 +249,6 @@ function LoginForm() {
               <div className="text-[10.5px] text-slate-400 leading-relaxed">
                 Your credentials are never logged. Authentication is routed through NextAuth secure sessions; evidence vault uses client-side AES-256-GCM + SHA-256 integrity chain.
               </div>
-            </div>
-          </div>
-
-          {/* Demo Fast-Fill Box */}
-          <div
-            className="p-3.5 rounded-2xl space-y-2.5 text-[11px]"
-            style={{
-              background:
-                "linear-gradient(135deg, rgba(15, 23, 42, 0.7), rgba(30, 41, 59, 0.35))",
-              border: "1px solid rgba(239, 68, 68, 0.15)",
-            }}
-          >
-            <div className="font-bold text-emergency-300 flex items-center gap-1.5">
-              <Sparkles className="w-3.5 h-3.5 text-emergency-400" />
-              <span>Hackathon Quick-Demo Personas</span>
-              <button
-                type="button"
-                onClick={() => {
-                  const sample = "SAKHI-2026-D3M01";
-                  navigator.clipboard?.writeText(sample).catch(() => {});
-                  setSakhiCopied(true);
-                  setTimeout(() => setSakhiCopied(false), 1800);
-                }}
-                className="ml-auto flex items-center gap-1 text-slate-400 hover:text-emergency-300 transition-colors"
-                title="Copy sample Sakhi Number format"
-              >
-                {sakhiCopied ? (
-                  <Check className="w-3 h-3 text-emerald-400" />
-                ) : (
-                  <Copy className="w-3 h-3" />
-                )}
-                <span className="tracking-wide">{sakhiCopied ? "Copied" : "SAKHI-2026-XXXXX"}</span>
-              </button>
-            </div>
-            <div className="text-[10px] text-slate-500 leading-snug">
-              <span className="text-slate-400">Backward-compat note:</span> Pre-registered demo accounts still accept their original email identifiers. Newly created accounts <span className="text-emergency-300 font-semibold">must</span> use their Sakhi Number.
-            </div>
-            <div className="grid grid-cols-1 sm:grid-cols-2 gap-2">
-              <button
-                type="button"
-                onClick={() => fillCredentials("admin@cybersakhi.org", "Admin@Sakhi2026!")}
-                className="p-2.5 rounded-xl bg-black/60 hover:bg-emergency-950/40 border border-emergency-600/30 text-left transition flex items-center gap-2.5"
-              >
-                <ShieldAlert className="w-4 h-4 text-red-400 shrink-0" />
-                <div>
-                  <div className="font-semibold text-slate-100 text-[11.5px]">Admin Account</div>
-                  <div className="text-[10px] text-slate-500 tracking-wide">Full RBAC · /admin panel</div>
-                </div>
-              </button>
-
-              <button
-                type="button"
-                onClick={() => fillCredentials("user@cybersakhi.org", "User@Sakhi2026!")}
-                className="p-2.5 rounded-xl bg-black/60 hover:bg-slate-800/60 border border-slate-700 text-left transition flex items-center gap-2.5"
-              >
-                <UserCheck className="w-4 h-4 text-emerald-400 shrink-0" />
-                <div>
-                  <div className="font-semibold text-slate-100 text-[11.5px]">User Account</div>
-                  <div className="text-[10px] text-slate-500 tracking-wide">Standard USER · All features</div>
-                </div>
-              </button>
             </div>
           </div>
 

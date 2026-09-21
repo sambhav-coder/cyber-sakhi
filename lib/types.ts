@@ -67,6 +67,12 @@ export interface EvidenceItem {
   fileSize: number;
   timestamp: string;
   sha256Hash: string;
+  /**
+   * Server-authoritative SHA-256 of the stored evidence bytes (see
+   * lib/evidenceDigest). Present when the server could hash actual content;
+   * used for blockchain anchoring, never the client-supplied sha256Hash.
+   */
+  integrityDigest?: string;
   category: "HARASSMENT" | "BLACKMAIL" | "SCAM" | "STALKING" | "THREAT" | "OTHER";
   notes?: string;
   integrityVerified: boolean;

@@ -2,6 +2,7 @@ import { getSupabaseServer } from "@/lib/supabaseServer";
 import { throwIfError, DatabaseError } from "./errors";
 import type { ChainOfCustodyRow } from "./types";
 import { computeSha256 } from "@/lib/encryption";
+import { createHash } from "node:crypto";
 
 export async function listChainOfCustody(
   evidenceId: string
@@ -33,7 +34,16 @@ export async function countCustodyByEvidence(
   return counts;
 }
 
-async function computeEventHash(
+/**
+ * Deterministic canonical hash of a chain-of-custody event.
+ *
+ * IMPORTANT: undefined and null are normalized to the same value ("null") so
+ * that appending (callers may pass undefined) and verifying (DB reads return
+ * null) always produce identical digests. Without this normalization,
+ * JSON.stringify omits keys for undefined but includes them as null from the
+ * DB, breaking hash recomputation and falsely flagging tampering.
+ */
+export async function computeEventHash(
   evidenceId: string,
   action: string,
   actorId: string | undefined,
@@ -44,17 +54,16 @@ async function computeEventHash(
   const canonicalString = JSON.stringify({
     evidence_id: evidenceId,
     action: action,
-    actor_id: actorId,
-    notes: notes,
+    actor_id: actorId ?? null,
+    notes: notes ?? null,
     previous_hash: previousHash,
-    timestamp: timestamp,
+    timestamp: normalizeTimestamp(timestamp),
   });
 
   try {
     return await computeSha256(canonicalString);
   } catch {
-    const crypto = require("crypto");
-    return crypto.createHash("sha256").update(canonicalString).digest("hex");
+    return createHash("sha256").update(canonicalString).digest("hex");
   }
 }
 
@@ -191,13 +200,7 @@ export function computeCustodyRoot(
 }
 
 function computeSha256Sync(data: string): string {
-  try {
-    const crypto = require("crypto");
-    return crypto.createHash("sha256").update(data).digest("hex");
-  } catch {
-    // Fallback: should not happen in Node runtime
-    return data;
-  }
+  return createHash("sha256").update(data).digest("hex");
 }
 
 export interface ChainVerificationResult {
@@ -213,8 +216,7 @@ async function verifyHash(data: string, expectedHash: string): Promise<boolean> 
   try {
     calculatedHash = await computeSha256(data);
   } catch {
-    const crypto = require("crypto");
-    calculatedHash = crypto.createHash("sha256").update(data).digest("hex");
+    calculatedHash = createHash("sha256").update(data).digest("hex");
   }
   return calculatedHash === expectedHash;
 }

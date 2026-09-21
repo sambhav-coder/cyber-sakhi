@@ -5,6 +5,7 @@ import {
   createEvidence,
   listEvidenceForUser,
   getEvidenceById,
+  setEvidenceAnchorLink,
 } from "@/lib/db/evidence";
 import {
   appendChainOfCustody,
@@ -22,9 +23,23 @@ import {
   MAX_ENCRYPTED_CONTENT_CHARS,
 } from "@/lib/evidenceConstants";
 import { EvidenceItem } from "@/lib/types";
-import { getLatestAnchorForEvidence } from "@/lib/db/blockchainAnchors";
-import { getSafeProviderMeta, anchorEvidenceOnChain, buildEvidenceAnchorPayload } from "@/lib/blockchain/anchor";
+import {
+  getLatestAnchorForEvidence,
+  createBlockchainAnchor,
+  updateBlockchainAnchor,
+} from "@/lib/db/blockchainAnchors";
+import {
+  getSafeProviderMeta,
+  anchorEvidenceOnChain,
+  buildEvidenceAnchorPayload,
+} from "@/lib/blockchain/anchor";
+import { isAnchorConfigured } from "@/lib/blockchain/provider";
 import { computeCustodyRoot } from "@/lib/db/chainOfCustody";
+import {
+  computeEvidenceContentDigest,
+  getAuthoritativeEvidenceDigest,
+  getCanonicalEvidenceDigest,
+} from "@/lib/evidenceDigest";
 
 export async function POST(req: NextRequest) {
   try {
@@ -120,6 +135,11 @@ export async function POST(req: NextRequest) {
       linkedCase = linkedCaseId;
     }
 
+    // Server-authoritative digest. Recomputes SHA-256 from the exact stored
+    // bytes (base64-decoded ciphertext). When bytes exist, this digest — not
+    // the client-supplied sha256Hash — becomes the anchored/authoritative one.
+    const integrityDigest = computeEvidenceContentDigest(encryptedContent);
+
     const result = await createEvidence({
       userId: session.user.id,
       caseId: linkedCase,
@@ -127,6 +147,7 @@ export async function POST(req: NextRequest) {
       encryptedContent,
       encryptionIv,
       encryptedSize,
+      integrityDigest,
     });
 
     let custodyErrors: string[] = [];
@@ -160,25 +181,60 @@ export async function POST(req: NextRequest) {
       }
     }
 
-    // Auto-anchor on upload (best-effort, never blocks the upload)
-    if (getSafeProviderMeta().configured) {
+    // Auto-anchor on upload (best-effort, never blocks the upload).
+    // IMPORTANT: the anchor record is persisted and linked to the evidence so
+    // verification is possible later. Without this, the tx hash would be lost
+    // and the evidence would incorrectly report "not_created".
+    if (isAnchorConfigured()) {
       try {
+        // Custody root — audit-only metadata (not part of the committed digest).
         const events = await listChainOfCustody(result.id);
         const custodyRoot = computeCustodyRoot(events);
-        const { payload, digest } = buildEvidenceAnchorPayload({
-          evidenceId: result.id,
-          evidenceCode: result.evidence_code || "",
-          sha256Hash: result.sha256 || "",
-          custodyRootHash: custodyRoot,
+
+        // Canonical evidence digest — the same single commitment used by the
+        // manual anchor route and by verification.
+        const canonicalDigest = getCanonicalEvidenceDigest({
+          encryptedContent: result.encrypted_content,
+          sha256: result.sha256,
+          metadata: result.metadata,
         });
+        const { payload } = buildEvidenceAnchorPayload({
+          evidenceCode: result.evidence_code || "",
+          sha256Hash: canonicalDigest,
+        });
+
+        const anchorRecord = await createBlockchainAnchor({
+          evidenceId: result.id,
+          anchorType: "evidence",
+          anchorVersion: 2,
+          provider: "evm",
+          networkName: getSafeProviderMeta().networkName,
+          chainId: getSafeProviderMeta().chainId,
+          payload,
+          digest: canonicalDigest,
+          payloadMetadata: { custodyRoot, sha256Hash: canonicalDigest, source: "auto-on-upload" },
+        });
+
         const anchorResult = await anchorEvidenceOnChain({
           scope: "evidence",
           evidenceId: result.id,
           payload,
-          digest,
+          digest: canonicalDigest,
         });
-        // Log but never fail the upload
+
+        await updateBlockchainAnchor(anchorRecord.id, {
+          status: anchorResult.status,
+          txHash: anchorResult.txHash,
+          blockNumber: anchorResult.blockNumber,
+          chainId: anchorResult.chainId,
+          networkName: anchorResult.networkName,
+          anchoredAt: anchorResult.anchoredAt,
+          transactionTimestamp: anchorResult.anchoredAt,
+        });
+
+        // Only link the evidence once a real transaction is confirmed.
         if (anchorResult.submitted) {
+          await setEvidenceAnchorLink(result.id, anchorRecord.id);
           custodyErrors.push(`Auto-anchor confirmed: ${anchorResult.txHash}`);
         }
       } catch (_) {
@@ -290,6 +346,7 @@ export async function GET(req: NextRequest) {
           fileType: evidence.mime_type || "application/octet-stream",
           fileSize: evidence.file_size ?? 0,
           sha256Hash: evidence.sha256 || "",
+          integrityDigest: getAuthoritativeEvidenceDigest(evidence),
           category: (evidence.category as EvidenceItem["category"]) || "OTHER",
           notes: evidence.description ?? null,
           integrityVerified: meta.integrityVerified,
@@ -323,7 +380,6 @@ export async function GET(req: NextRequest) {
     const sanitized: EvidenceItem[] = evidence.map((ev) => {
       const cn = ev.case_id ? (caseNumbers[ev.case_id] ?? null) : null;
       const cc = custodyCounts[ev.id] ?? 0;
-      const anchor = ev.blockchain_anchor_id ? undefined : undefined; // loaded lazily if needed
       if (isCryptoLocked(ev)) {
         return toMaskedEvidenceItem(ev, { caseNumber: cn, custodyCount: cc });
       }
