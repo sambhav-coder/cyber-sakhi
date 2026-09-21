@@ -1768,7 +1768,7 @@ export async function recordGovExport(input: GovExportRecordInput): Promise<void
     row_count: input.rowCount,
     file_name: input.fileName,
     checksum: input.checksum,
-    status: "ready",
+    status: "COMPLETED",
   });
   throwIfError(error, "Failed to record export.");
 }
