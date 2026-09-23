@@ -4,7 +4,7 @@ import { authOptions } from "@/lib/authOptions";
 import { reasonGeneral, reasonForCase, SakhiAIUnavailableError } from "@/lib/sakhiReasoning";
 import { sanitizeImages, base64ByteLength, MAX_IMAGES_PER_REPLY, MAX_IMAGE_BYTES, MAX_TOTAL_IMAGE_BYTES } from "@/lib/ai/gemini";
 import type { GeminiImageInput } from "@/lib/ai/gemini";
-import { normalizeLanguage, detectLanguage, explicitLanguageRequest } from "@/lib/sakhiAI";
+import { normalizeLanguage, resolveTurnLanguage, scopeGuard, scopeGuardReply } from "@/lib/sakhiAI";
 import type { ChatContextFragment, SakhiLanguage } from "@/lib/sakhiAI";
 import {
   getCaseForUser,
@@ -18,6 +18,7 @@ import { appendCaseChatMessage } from "@/lib/db/caseChat";
 import {
   appendSakhiMessage,
   createSakhiConversation,
+  filterMemoryForModel,
   getSakhiConversation,
   listSakhiMemory,
   listSakhiMessages,
@@ -25,6 +26,11 @@ import {
 } from "@/lib/db/sakhiMemory";
 import { getEvidenceByCode } from "@/lib/db/evidence";
 import { evidenceBriefText, evidenceToBrief } from "@/lib/evidenceBrief";
+import {
+  formatRagContextBlock,
+  mergeCitations,
+  retrieveRelevantDocs,
+} from "@/lib/rag/retrieve";
 
 interface ChatAttachmentInput {
   kind?: string;
@@ -236,13 +242,53 @@ export async function POST(req: NextRequest) {
     }
 
     // Automatic language matching: the brain infers the user's language from
-    // THIS message (never locked to earlier turns); an explicit "in Hindi"
-    // request overrides detection. A client-picked preference is only a hint.
-    const lang = explicitLanguageRequest(message) || detectLanguage(message);
+    // THIS message (never locked to earlier turns); a visible EN/हिं/Hinglish
+    // toggle (forceLanguage) pins the reply language until changed, taking
+    // priority over an in-message request, which in turn overrides detection.
+    const rawForce = body.forceLanguage;
+    const pin: SakhiLanguage | null =
+      rawForce === "en" || rawForce === "hi" || rawForce === "hinglish"
+        ? rawForce
+        : null;
+    const lang = resolveTurnLanguage(pin, message);
     void normalizeLanguage(language as SakhiLanguage);
+
+    // Cybersecurity-only scope guard (deterministic, before any LLM call).
+    // Clearly off-topic queries with no cyber/safety signal are refused here
+    // without spending a Gemini call. Ambiguous or safety-marked queries pass
+    // through — the LLM politely redirects those.
+    const scope = scopeGuard(message);
+    if (scope.blocked) {
+      return NextResponse.json({
+        id: "sakhi_scope_" + Date.now(),
+        sender: "sakhi",
+        text: scopeGuardReply(lang),
+        timestamp: new Date().toLocaleTimeString([], {
+          hour: "2-digit",
+          minute: "2-digit",
+        }),
+        category: "general",
+        provider: {
+          key: "deterministic-scope-guard",
+          label: "Deterministic safety scope guard",
+        },
+        context: {
+          blocked: true,
+          code: scope.code,
+          handledWithoutLLM: true,
+          detectedLanguage: lang,
+        },
+      });
+    }
 
     let caseIdValue = typeof caseId === "string" ? caseId : "";
     let resolvedFromCaseNumber = false;
+
+    // Real RAG: ranked retrieval over the curated public KB (never user case
+    // data — the KB contains nothing per-user, so cross-user leakage is
+    // impossible by construction). Runs for general AND case turns.
+    const ragHits = retrieveRelevantDocs(message, { topK: 3 });
+    const rag = formatRagContextBlock(ragHits);
 
     // Stage C2: allow "my case number is CS-2026-XXXXXX" without a caseId.
     if (!caseIdValue) {
@@ -258,9 +304,10 @@ export async function POST(req: NextRequest) {
         } else {
           // Ownership-scoped: never reveal whether the number exists for
           // another account. Reply with generic guidance + a note only.
-          const result = await reasonGeneral({ userQuery: message, language: lang });
+          const result = await reasonGeneral({ userQuery: message, language: lang, ragBlock: rag.block });
           return NextResponse.json({
             ...result.reply,
+            citedSources: mergeCitations(result.citedSources, ragHits),
             provider: {
               key: result.providerKey,
               label: result.providerLabel,
@@ -369,15 +416,12 @@ export async function POST(req: NextRequest) {
 
       let memoryRows: { key: string; value: string }[] = [];
       try {
-        memoryRows = (await listSakhiMemory(session.user.id))
-          // Stored language preferences are surfaced nowhere to the model —
-          // language is decided per-message by detection/override, so a past
-          // "prefer Hindi" row can never force a following English turn.
-          .filter((m) => !/^sakhi\.language/i.test(m.key))
-          .map((m) => ({
+        memoryRows = filterMemoryForModel(
+          (await listSakhiMemory(session.user.id)).map((m) => ({
             key: m.key,
             value: m.value,
-          }));
+          }))
+        );
       } catch {
         memoryRows = [];
       }
@@ -386,6 +430,7 @@ export async function POST(req: NextRequest) {
         userQuery: message,
         language: lang,
         images,
+        ragBlock: rag.block,
         context: {
           history,
           attachmentSummaries,
@@ -459,7 +504,8 @@ export async function POST(req: NextRequest) {
 
       return NextResponse.json({
         ...result.reply,
-        detectedLanguage: detectLanguage(message),
+        citedSources: mergeCitations(result.citedSources, ragHits),
+        detectedLanguage: lang,
         provider: {
           key: result.providerKey,
           label: result.providerLabel,
@@ -475,6 +521,8 @@ export async function POST(req: NextRequest) {
           reportCount: reportBriefs.length,
           unverifiedEvidence,
           unverifiedReports,
+          ragCount: ragHits.length,
+          ragSources: rag.sources,
         },
       });
     }
@@ -552,7 +600,41 @@ export async function POST(req: NextRequest) {
       escalated: caseRow.status === "escalated" || undefined,
     };
 
-    const result = await reasonForCase(caseIdValue, message, lang, context, images);
+    // Case-aware continuity: the model sees THIS case's own chat history plus
+    // the user's non-sensitive long-term memory. getCaseChat is
+    // ownership-checked (returns [] for foreign cases), so one case can never
+    // receive another case's — or another user's — memory.
+    let caseHistory: ChatContextFragment["history"] = [];
+    try {
+      const rows = await getCaseChat(caseIdValue, session.user.id);
+      caseHistory = rows.slice(-12).map((m) => ({
+        sender: (m.role === "sakhi" ? "sakhi" : "user") as "user" | "sakhi",
+        text: m.content,
+      }));
+    } catch {
+      caseHistory = [];
+    }
+    let caseMemoryRows: { key: string; value: string }[] = [];
+    try {
+      caseMemoryRows = filterMemoryForModel(
+        (await listSakhiMemory(session.user.id)).map((m) => ({
+          key: m.key,
+          value: m.value,
+        }))
+      );
+    } catch {
+      caseMemoryRows = [];
+    }
+
+    const result = await reasonForCase(
+      caseIdValue,
+      message,
+      lang,
+      context,
+      { history: caseHistory, memory: caseMemoryRows },
+      images,
+      rag.block
+    );
 
     let memoryPersisted = false;
     try {
@@ -575,6 +657,7 @@ export async function POST(req: NextRequest) {
 
     return NextResponse.json({
       ...result.reply,
+      citedSources: mergeCitations(result.citedSources, ragHits),
       provider: {
         key: result.providerKey,
         label: result.providerLabel,
@@ -584,6 +667,8 @@ export async function POST(req: NextRequest) {
         caseNumber: context.caseNumber,
         resolvedFromCaseNumber,
         memoryPersisted,
+        ragCount: ragHits.length,
+        ragSources: rag.sources,
       },
     });
   } catch (error) {

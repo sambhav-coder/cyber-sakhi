@@ -4,10 +4,10 @@
  * Honest by design:
  *  - STT uses the browser's SpeechRecognition (mic stays in the browser; nothing
  *    is uploaded unless a server STT provider is configured and active).
- *  - TTS PREFERS the self-hosted Piper engine behind /api/voice/tts — English
- *    amy for English turns, Hindi priyamvada for Hindi/Hinglish turns, chosen
- *    PER TURN by the server — and falls back to speechSynthesis (with a
- *    prefer-Hindi/English voice) only when that engine is unavailable.
+ *  - TTS PREFERS the Node Edge TTS engine behind /api/voice/tts — en-IN Neerja
+ *    for English turns, hi-IN Swara for Hindi/Hinglish turns, chosen PER TURN
+ *    by the server — and falls back to speechSynthesis (with a prefer-female
+ *    voice) only when that engine is unavailable. No local Python/Piper.
  *  - Every capability is probed; if the browser lacks support, callers get an
  *    explicit error/status instead of a fake recording or fake voice.
  */
@@ -601,6 +601,18 @@ export interface SpeakOptions {
   onError?: (message: string) => void;
   /** Character index (within the full text) of the current spoken word. */
   onBoundary?: (charIndex: number) => void;
+  /**
+   * Real-audio hook (Edge TTS path only): fires with the live
+   * HTMLAudioElement when chunk playback starts, and with null when the
+   * element is done/cancelled. Lets the avatar drive lip motion from the
+   * ACTUAL audio signal (AnalyserNode) instead of estimated timing.
+   * Never fires for the speechSynthesis fallback (no audio buffer exposed).
+   */
+  onAudioElement?: (el: HTMLAudioElement | null) => void;
+  /**
+   * Exact word-boundary timing from Edge TTS synthesis.
+   */
+  onWords?: (words: { text: string; startMs: number; endMs: number }[]) => void;
 }
 
 export interface SpeakHandle {
@@ -758,14 +770,14 @@ export function speakNow(text: string, opts: SpeakOptions): SpeakHandle {
 }
 
 // ---------------------------------------------------------------------------
-// TTS — SELF-HOSTED PIPER ENGINE (preferred) WITH SPEECHSYNTHESIS FALLBACK
+// TTS — SERVER EDGE TTS ENGINE (preferred) WITH SPEECHSYNTHESIS FALLBACK
 // ---------------------------------------------------------------------------
 
 async function fetchLocalSpeech(
   text: string,
   language: SakhiVoiceLanguage
 ): Promise<
-  | { ok: true; audioUrl: string; voice: string; mimeType: string }
+  | { ok: true; audioUrl: string; voice: string; mimeType: string; words: { text: string; startMs: number; endMs: number }[] }
   | { ok: false; code: string; note: string }
 > {
   const clean = stripMarkdown(text);
@@ -787,7 +799,8 @@ async function fetchLocalSpeech(
       status: res.status, 
       available: data?.available, 
       code: data?.code,
-      note: data?.note 
+      note: data?.note,
+      wordCount: data?.words?.length || 0,
     });
     if (!res.ok || !data || data.available !== true || !data.audioB64) {
       return {
@@ -805,24 +818,26 @@ async function fetchLocalSpeech(
     console.log("[Sakhi Voice] Audio blob created:", { 
       audioUrl, 
       voice: data.voice, 
-      mimeType: data.mimeType 
+      mimeType: data.mimeType,
+      words: data.words?.length || 0,
     });
     return {
       ok: true,
       audioUrl,
       voice: data.voice || "",
       mimeType: data.mimeType || "audio/mpeg",
+      words: Array.isArray(data.words) ? data.words : [],
     };
   } catch (error) {
     console.error("[Sakhi Voice] TTS fetch failed:", error);
-    return { ok: false, code: "network", note: "Could not reach the local speech engine." };
+    return { ok: false, code: "network", note: "Could not reach the Sakhi TTS route." };
   }
 }
 
 /**
- * Speak with the SELF-HOSTED Piper engine first (per-turn voice chosen by the
+ * Speak with the server Edge TTS route first (per-turn voice chosen by the
  * server from the current turn's language), and fall back to speechSynthesis
- * only if the engine is missing or breaks. Keeps the same SpeakOptions contract
+ * only if the route is missing or breaks. Keeps the same SpeakOptions contract
  * so the orb/avatar lifecycle, cancellations and autoplay-block detection all
  * keep working.
  * 
@@ -852,6 +867,11 @@ export function speakWithEngine(
     try {
       currentAudio?.pause();
     } catch { /* noop */ }
+    if (opts.onAudioElement) {
+      try {
+        opts.onAudioElement(null);
+      } catch { /* noop */ }
+    }
     cancelFns.forEach((fn) => {
       try {
         fn();
@@ -868,7 +888,7 @@ export function speakWithEngine(
       }
       return;
     }
-    console.warn("[Sakhi Voice] Local TTS engine unavailable - falling back to browser speechSynthesis");
+    console.warn("[Sakhi Voice] Edge TTS route unavailable - falling back to browser speechSynthesis");
     if (opts.onError) {
       opts.onError("Voice engine unavailable - using browser fallback");
     }
@@ -894,7 +914,7 @@ export function speakWithEngine(
         // First chunk failed -> the whole utterance uses the browser voice.
         // A mid-sequence failure is surfaced honestly instead of re-chunking.
         if (i === 0) {
-          console.warn("[Sakhi Voice] Local TTS API returned error:", srv.code, srv.note);
+          console.warn("[Sakhi Voice] Edge TTS API returned error:", srv.code, srv.note);
           fallback();
         } else if (opts.onError) {
           opts.onError("Sakhi couldn't finish that reply aloud.");
@@ -905,8 +925,14 @@ export function speakWithEngine(
         chunkIndex: i, 
         totalChunks: chunks.length,
         voice: srv.voice,
-        mimeType: srv.mimeType 
+        mimeType: srv.mimeType,
+        words: srv.words?.length || 0,
       });
+      if (opts.onWords && srv.words && srv.words.length > 0) {
+        try {
+          opts.onWords(srv.words);
+        } catch { /* word sync hook */ }
+      }
       const el = new Audio();
       currentAudio = el;
       el.src = srv.audioUrl;
@@ -914,6 +940,11 @@ export function speakWithEngine(
       try {
         await el.play();
         console.log("🧪 [TEST MODE] Audio playback started successfully");
+        if (opts.onAudioElement) {
+          try {
+            opts.onAudioElement(el);
+          } catch { /* avatar sync must never break audio */ }
+        }
       } catch (e) {
         console.warn("[Sakhi Voice] Audio playback failed:", e);
         URL.revokeObjectURL(srv.audioUrl);
@@ -950,6 +981,11 @@ export function speakWithEngine(
           { once: true }
         );
       });
+      if (opts.onAudioElement) {
+        try {
+          opts.onAudioElement(null);
+        } catch { /* noop */ }
+      }
       URL.revokeObjectURL(srv.audioUrl);
       currentAudio = null;
       if (handle.cancelled) return;

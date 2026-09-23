@@ -10,6 +10,7 @@ function edition(overrides: Partial<NewsEdition> = {}): NewsEdition {
     preparedAt: "2026-09-19T12:00:00.000Z",
     fetchedAt: "2026-09-19T12:00:00.000Z",
     cacheStatus: "live",
+    language: "en",
     feedsTotal: 1,
     feedsOk: 1,
     articles: [],
@@ -88,7 +89,7 @@ describe("news refresh route security", () => {
     expect(res.status).toBe(200);
     const body = await res.json();
     expect(body.ok).toBe(true);
-    expect(getEdition).toHaveBeenCalledWith({ force: true });
+    expect(getEdition).toHaveBeenCalledWith({ force: true, language: "en" });
   });
 
   it("refreshes with the correct bearer token in production", async () => {
@@ -97,7 +98,7 @@ describe("news refresh route security", () => {
 
     const res = await handle(mockRequest({ Authorization: "Bearer s3cr3t" }));
     expect(res.status).toBe(200);
-    expect(getEdition).toHaveBeenCalledWith({ force: true });
+    expect(getEdition).toHaveBeenCalledWith({ force: true, language: "en" });
   });
 
   it("treats GET identically to POST when authorized", async () => {
@@ -120,6 +121,6 @@ describe("news refresh route security", () => {
 
     const res = await handle(mockRequest({}));
     expect(res.status).toBe(200);
-    expect(getEdition).toHaveBeenCalledWith({ force: true });
+    expect(getEdition).toHaveBeenCalledWith({ force: true, language: "en" });
   });
 });

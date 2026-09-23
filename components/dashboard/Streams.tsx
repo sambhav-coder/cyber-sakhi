@@ -27,7 +27,7 @@ const KIND_META: Record<
   },
   SOS: {
     icon: <Radio className="w-3.5 h-3.5 text-red-400" />,
-    label: "Emergency Beacon",
+    label: "Location Shared",
   },
 };
 
@@ -40,7 +40,7 @@ export const ActivityFeed: React.FC<{ entries: ActivityEntry[] }> = ({
     return (
       <p className="text-xs text-slate-500 py-6 text-center">
         No activity recorded yet. Screening a message, vaulting evidence or
-        drilling the SOS beacon will appear here.
+        sharing a live location will appear here.
       </p>
     );
   }

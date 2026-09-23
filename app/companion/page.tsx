@@ -29,8 +29,13 @@ import {
   Pin,
   PinOff,
   Share2,
+  Copy,
+  Check,
+  Square,
 } from "lucide-react";
 import type { ChatMessage, SakhiLanguage } from "@/lib/sakhiAI";
+import { detectLanguage, normalizeLanguage } from "@/lib/sakhiAI";
+import { getEntryLanguage } from "@/lib/entryLanguage";
 import { LockerPicker } from "@/components/companion/LockerPicker";
 import type { LockerItem } from "@/components/companion/LockerPicker";
 import type {
@@ -44,7 +49,8 @@ import {
   waitForVoices,
   type SpeakHandle,
 } from "@/lib/voice/speech";
-import { SAKHI_CHAT_INTRO } from "@/lib/voice/content";
+import { getSakhiIntro } from "@/lib/voice/content";
+import { LanguageToggle, type SmartLangMode } from "@/components/companion/LanguageToggle";
 
 // Live 3D Sakhi avatar — TalkingHead (WebGL) + Three.js. Imported client-side
 // only so WebGL/browser APIs never execute during SSR. Fully replaces the old
@@ -126,18 +132,23 @@ function nowLabel(): string {
 }
 
 /**
- * Chat Mode speaks SAKHI_CHAT_INTRO — the SAME approved string rendered in the
- * welcome card below (single source of truth; distinct from the landing/hub
- * and voice-mode intros, so users never hear the same script twice).
+ * Chat Mode intro — resolved from the single source of truth at speak time
+ * so the smart EN/हिं switch controls the NEXT intro (and its TTS voice).
  */
-const SAKHI_INTRO_LINE_1 = SAKHI_CHAT_INTRO;
+const chatIntroFor = (mode: SmartLangMode): string => getSakhiIntro("chat", mode);
 const AUTOPLAY_BLOCK_DETECT_MS = 2600;
 
 function CompanionContent() {
   const searchParams = useSearchParams();
   const router = useRouter();
 
-  const [language, setLanguage] = useState<SakhiLanguage>("en");
+  const [language, setLanguage] = useState<SakhiLanguage>(() => getEntryLanguage() ?? "en");
+  // ONE smart language switch (EN/हिं) — the preference default for every
+  // turn. Initialized from the entry gate so a Hindi choice made before the
+  // intro carries into Chat. Hinglish input is still detected per turn and
+  // answered naturally via a one-shot override at send time.
+  const [langPin, setLangPin] = useState<SmartLangMode>(() => getEntryLanguage() ?? "en");
+  const [copiedId, setCopiedId] = useState<string | null>(null);
   const [inputText, setInputText] = useState("");
   const [messages, setMessages] = useState<ChatMessage[]>([]);
   const [isTyping, setIsTyping] = useState(false);
@@ -186,6 +197,7 @@ function CompanionContent() {
   const messagesEndRef = useRef<HTMLDivElement>(null);
   const inputRef = useRef<HTMLTextAreaElement>(null);
   const uploadInputRef = useRef<HTMLInputElement>(null);
+  const sendAbortRef = useRef<AbortController | null>(null);
 
   // ---- conversations -------------------------------------------------------
   const refreshConversations = async () => {
@@ -330,9 +342,11 @@ function CompanionContent() {
 
     void (async () => {
       try {
-        // Guarantee voice list is populated before we pick anything.
+        // Guarantee voice list is populated before we pick anything. The
+        // fallback voice matches the entry-gate language (Edge TTS already
+        // picks per-turn; this is only the speechSynthesis fallback).
         await waitForVoices();
-        const v = await resolveFemaleVoice("en");
+        const v = await resolveFemaleVoice(getEntryLanguage() ?? "en");
         if (cancelled) return;
         introVoiceRef.current = v;
         setVoiceReady(true);
@@ -379,29 +393,43 @@ function CompanionContent() {
         return next;
       });
 
-      // Engine-first (local Piper en_GB-aru) with the pre-resolved browser
-      // voice as fallback — the SAME English voice pipeline the landing uses,
-      // so the approved English voice/quality is identical across surfaces.
-      console.log("🧪 [Chat Mode] TTS REQUEST:", { 
+      // Engine-first (server Edge TTS via /api/voice/tts) with the
+      // pre-resolved browser voice as fallback — the intro language follows
+      // the smart switch; the spoken string is the same canonical intro
+      // rendered in the welcome card (single source of truth).
+      console.log("🧪 [Chat Mode] TTS REQUEST:", {
         TTS_ENGINE: "edge-tts (via /api/voice/tts)",
-        LANGUAGE: "en",
+        LANGUAGE: langPin,
         TEXT_LENGTH: text.length,
         TEST_MODE: process.env.SAKHI_TEST_MODE === 'edge-tts-only' ? "edge-tts-only" : "normal"
       });
       let fallbackId: number | null = null;
+      let wordTimingsDelivered = false;
       const handle = speakWithEngine(text, introVoiceRef.current, {
-        language: "en",
+        language: langPin,
         rate: 0.97,
         pitch: 1.03,
+        onAudioElement: (el) => avatarRef.current?.attachAudioElement(el),
+        onWords: (words) => {
+          if (words.length > 0) {
+            if (process.env.NODE_ENV === "development")
+              console.log("[PROD-LIPSYNC][Chat] Word boundaries received:", words.length);
+            wordTimingsDelivered = true;
+            avatarRef.current?.speakStart(text, words);
+          }
+        },
         onStart: () => {
           console.log("🧪 [Chat Mode] TTS AUDIO STARTED");
           speechStartedRef.current = true;
           setIsSpeaking(true);
           setSpeechBlocked(false);
-          // Sakhi's mouth follows the real audio — page triggers the viseme track.
-          avatarRef.current?.speakStart(text);
-          // No per-word boundary events from the engine, so a light interval
-          // drives the typewriter reveal for the full spoken duration.
+          // Only call speakStart if onWords didn't already deliver exact timing.
+          if (!wordTimingsDelivered) {
+            if (process.env.NODE_ENV === "development")
+              console.log("[PROD-LIPSYNC][Chat] Fallback: no word timings, using estimated");
+            avatarRef.current?.speakStart(text);
+          }
+          // Light interval drives typewriter reveal for the full spoken duration.
           fallbackId = window.setInterval(() => {
             if (introAbortRef.current) return;
             setRevealCount((prev) => Math.min(prev + 3, text.length));
@@ -445,7 +473,7 @@ function CompanionContent() {
     avatarRef.current?.setExpression("warm");
 
     void (async () => {
-      await speakLine(SAKHI_INTRO_LINE_1, 0);
+      await speakLine(chatIntroFor(langPin), 0);
       if (introAbortRef.current) return;
       avatarRef.current?.setExpression("neutral");
       setIntroPhase("done");
@@ -644,6 +672,27 @@ function CompanionContent() {
   };
 
   // ---- sending -------------------------------------------------------------
+  const copyText = async (id: string, text: string) => {
+    try {
+      await navigator.clipboard.writeText(text);
+    } catch {
+      const ta = document.createElement("textarea");
+      ta.value = text;
+      ta.style.position = "fixed";
+      ta.style.opacity = "0";
+      document.body.appendChild(ta);
+      ta.select();
+      try { document.execCommand("copy"); } catch { /* noop */ }
+      document.body.removeChild(ta);
+    }
+    setCopiedId(id);
+    window.setTimeout(() => setCopiedId((cur) => (cur === id ? null : cur)), 1600);
+  };
+
+  const stopSending = () => {
+    sendAbortRef.current?.abort();
+  };
+
   const doSend = async (
     text?: string,
     forcedAttachments?: PendingAttachment[]
@@ -651,6 +700,10 @@ function CompanionContent() {
     const query = (text ?? inputText).trim();
     const atts = forcedAttachments ?? attachments;
     if (!query) return null;
+
+    const ctrl = new AbortController();
+    sendAbortRef.current?.abort();
+    sendAbortRef.current = ctrl;
 
     setMessages((prev) => [...prev, {
       id: "user_" + Date.now(),
@@ -664,12 +717,19 @@ function CompanionContent() {
     setIsTyping(true);
 
     try {
+      // One-shot Hinglish override: the single EN/हिं switch stays clean,
+      // but a Hinglish message is still answered naturally (server detects
+      // it too; explicit in-message requests always win server-side).
+      const turnPin: SakhiLanguage =
+        detectLanguage(query) === "hinglish" ? "hinglish" : langPin;
       const res = await fetch("/api/chat", {
         method: "POST",
         headers: { "Content-Type": "application/json" },
+        signal: ctrl.signal,
         body: JSON.stringify({
           message: query,
           language,
+          forceLanguage: turnPin,
           conversationId: activeConvoId,
           caseId: activeCase?.id || undefined,
           attachments: atts,
@@ -685,11 +745,13 @@ function CompanionContent() {
         timestamp: data?.timestamp || nowLabel(),
         quickActions: data?.quickActions || [],
         category: data?.category,
+        citedSources: Array.isArray(data?.citedSources) ? data.citedSources : undefined,
       };
       setMessages((prev) => [...prev, reply]);
       if (data?.provider?.label) setProviderLabel(data.provider.label);
-      if (data?.detectedLanguage) {
-        setLanguage(data.detectedLanguage);
+      // Server is authoritative per turn (explicit request > pin > detect).
+      if (typeof data?.detectedLanguage === "string") {
+        setLanguage(normalizeLanguage(data.detectedLanguage));
       }
       if (data?.context?.conversationId) {
         setActiveConvoId(data.context.conversationId);
@@ -703,6 +765,11 @@ function CompanionContent() {
       setAttachments([]);
       return reply.text || data?.text || null;
     } catch (err) {
+      if (err instanceof Error && err.name === "AbortError") {
+        // User pressed Stop — clear the failed flag so Retry never resurfaces it.
+        setLastFailedText(null);
+        return null;
+      }
       const msg = err instanceof Error ? err.message : "Sakhi companion service error.";
       setLastFailedText(query);
       setMessages((prev) => [...prev, {
@@ -714,6 +781,7 @@ function CompanionContent() {
       // Attachments stay attached so Retry resends the same content.
       return null;
     } finally {
+      if (sendAbortRef.current === ctrl) sendAbortRef.current = null;
       setIsTyping(false);
     }
   };
@@ -968,6 +1036,7 @@ function CompanionContent() {
           </div>
 
           <div className="flex items-center gap-3 companion-fade-in companion-fade-in-delay-1">
+            <LanguageToggle value={langPin} onChange={(v) => { setLangPin(v); setLanguage(v); }} />
             <div className="hidden sm:flex items-center gap-1.5 px-2.5 py-1.5 rounded-xl border border-slate-800/90 bg-slate-950/40">
               <Shield className="w-3.5 h-3.5 text-emerald-400" />
               <span className="text-[10px] font-bold uppercase tracking-[0.18em] text-slate-400">
@@ -1020,6 +1089,9 @@ function CompanionContent() {
                 isSpeaking={isSpeaking}
                 reducedMotion={reducedMotion}
                 onStatus={setAvatarStatus}
+                pipelineState={
+                  isTyping ? "thinking" : isSpeaking ? "speaking" : introPhase === "speaking" ? "speaking" : "idle"
+                }
               />
             </div>
 
@@ -1308,7 +1380,7 @@ function CompanionContent() {
   const showWelcome = chatWelcome && !activeCase && !hasMessages;
   return (
     <div className="max-w-6xl mx-auto animate-in fade-in duration-300">
-      {/* Header Bar (no voice shortcut, no language buttons — language is auto) */}
+      {/* Header Bar (no voice shortcut; reply language via the visible toggle) */}
       <div className="flex items-center justify-between gap-4 px-1 pt-2 pb-4">
         <div className="flex items-center gap-3 min-w-0">
           <div className="w-10 h-10 rounded-2xl bg-gradient-to-tr from-emergency-700 via-emergency-800 to-emergency-950 p-0.5 shadow-lg shadow-emergency-950/40 shrink-0">
@@ -1326,12 +1398,13 @@ function CompanionContent() {
               </span>
             </div>
             <p className="text-[11px] text-slate-400 truncate">
-              Confidential support · private · auto language
+              Confidential support · private · reply language
             </p>
           </div>
         </div>
 
         <div className="flex items-center gap-2 shrink-0">
+          <LanguageToggle compact value={langPin} onChange={(v) => { setLangPin(v); setLanguage(v); }} />
           <span className="hidden sm:inline-flex items-center gap-1.5 text-[10px] px-2.5 py-1 rounded-lg bg-slate-900/80 border border-slate-700/60 text-emergency-300/90 font-semibold">
             <Sparkles className="w-3 h-3" />
             {providerLabel || providerStatus || "Gemini AI"}
@@ -1359,7 +1432,7 @@ function CompanionContent() {
               Chat Mode
             </h2>
             <p className="text-[13px] text-slate-400 leading-relaxed">
-              {SAKHI_CHAT_INTRO}
+              {chatIntroFor(langPin)}
             </p>
           </div>
           <div className="flex flex-wrap items-center justify-center gap-3 pt-1">
@@ -1660,6 +1733,23 @@ function CompanionContent() {
                         ))}
                       </div>
                     )}
+                    {msg.sender === "sakhi" &&
+                      msg.citedSources &&
+                      msg.citedSources.length > 0 && (
+                        <div className="flex flex-wrap gap-1.5 pt-2 mt-2 border-t border-slate-800/80">
+                          <span className="text-[10px] text-slate-500 font-semibold uppercase tracking-wider">
+                            Sources
+                          </span>
+                          {msg.citedSources.map((src, i) => (
+                            <span
+                              key={i}
+                              className="px-2 py-0.5 rounded-md bg-slate-800/80 text-slate-400 border border-slate-700/60 text-[10px] font-semibold"
+                            >
+                              {src}
+                            </span>
+                          ))}
+                        </div>
+                      )}
                     {msg.id.startsWith("sakhi_err_") && lastFailedText && (
                       <div className="pt-1">
                         <button
@@ -1677,11 +1767,26 @@ function CompanionContent() {
                       </div>
                     )}
                     <div
-                      className={`text-[10px] text-right mt-1.5 ${
+                      className={`text-[10px] mt-1.5 flex items-center justify-end gap-1.5 ${
                         msg.sender === "user" ? "text-emergency-200/60" : "text-slate-500"
                       }`}
                     >
-                      {msg.timestamp}
+                      {msg.sender === "sakhi" && (
+                        <button
+                          type="button"
+                          onClick={() => void copyText(msg.id, msg.text)}
+                          aria-label={copiedId === msg.id ? "Copied" : "Copy response"}
+                          className="inline-flex items-center gap-1 px-1.5 py-0.5 rounded-md hover:bg-slate-800 transition text-slate-400 hover:text-white"
+                        >
+                          {copiedId === msg.id ? (
+                            <Check className="w-3 h-3 text-emerald-400" />
+                          ) : (
+                            <Copy className="w-3 h-3" />
+                          )}
+                          <span>{copiedId === msg.id ? "Copied" : "Copy"}</span>
+                        </button>
+                      )}
+                      <span>{msg.timestamp}</span>
                     </div>
                   </div>
                 </div>
@@ -1698,6 +1803,15 @@ function CompanionContent() {
                     <span className="w-1.5 h-1.5 rounded-full bg-emergency-400 animate-pulse delay-150" />
                     <span className="ml-1 text-[11px]">Sakhi is thinking…</span>
                   </div>
+                  <button
+                    type="button"
+                    onClick={stopSending}
+                    aria-label="Stop generating reply"
+                    className="flex items-center gap-1.5 px-2.5 py-1.5 rounded-xl bg-slate-900 hover:bg-slate-800 border border-slate-700 text-slate-300 hover:text-emergency-200 text-[11px] font-semibold transition"
+                  >
+                    <Square className="w-3 h-3" />
+                    Stop
+                  </button>
                 </div>
               )}
 

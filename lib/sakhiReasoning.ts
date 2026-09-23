@@ -91,6 +91,8 @@ export interface ReasoningResult {
   reply: ChatMessage;
   providerKey: string;
   providerLabel: string;
+  /** Short source labels the model cited (helplines, evidence, reports…). */
+  citedSources: string[];
 }
 
 function nowLabel(): string {
@@ -128,6 +130,7 @@ async function geminiOrThrow(input: {
   context?: ChatContextFragment;
   caseContext?: Record<string, unknown>;
   images?: GeminiImageInput[];
+  ragBlock?: string;
 }): Promise<ReasoningResult> {
   const provider = geminiProvider();
   if (provider.status !== "active") {
@@ -143,11 +146,13 @@ async function geminiOrThrow(input: {
       context: input.context,
       caseContext: input.caseContext,
       images: input.images,
+      ragBlock: input.ragBlock,
     });
     return {
       reply: toChatMessage(spec),
       providerKey: provider.key,
       providerLabel: provider.label,
+      citedSources: spec.uses,
     };
   } catch (error) {
     console.warn("[sakhiReasoning] Gemini call failed:", error instanceof Error ? error.message : String(error));
@@ -163,6 +168,7 @@ export async function reasonGeneral(input: {
   language: SakhiLanguage;
   context?: ChatContextFragment;
   images?: GeminiImageInput[];
+  ragBlock?: string;
 }): Promise<ReasoningResult> {
   return geminiOrThrow(input);
 }
@@ -171,8 +177,18 @@ export async function reasonForCase(
   caseId: string,
   userQuery: string,
   language: SakhiLanguage,
-  context: Record<string, unknown>,
-  images?: GeminiImageInput[]
+  caseFacts: Record<string, unknown>,
+  fragment?: ChatContextFragment,
+  images?: GeminiImageInput[],
+  ragBlock?: string
 ): Promise<ReasoningResult> {
-  return geminiOrThrow({ userQuery, language, caseContext: context, images });
+  void caseId;
+  return geminiOrThrow({
+    userQuery,
+    language,
+    context: fragment,
+    caseContext: caseFacts,
+    images,
+    ragBlock,
+  });
 }

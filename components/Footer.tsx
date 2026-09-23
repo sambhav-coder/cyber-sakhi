@@ -58,7 +58,7 @@ export const Footer: React.FC = () => {
               <span>Cyber Sakhi</span>
             </div>
             <p className="text-xs text-slate-400 leading-relaxed max-w-md">
-              Unified AI safety companion offering holistic protection from both online harassment and offline threats. Equipped with on-device NLP threat heuristics, SHA-256 evidence integrity locker, VoiceShield emergency dispatch, and HerGuardian AI guidance.
+              Unified AI safety companion offering holistic protection from both online harassment and offline threats. Equipped with on-device NLP threat heuristics, SHA-256 evidence integrity locker, Live Location capture, and HerGuardian AI guidance.
             </p>
             <div className="flex items-center gap-2 text-xs text-purple-300 font-medium pt-1">
               <span>Presented for Hackathon by</span>
@@ -75,7 +75,7 @@ export const Footer: React.FC = () => {
             </h4>
             <ul className="space-y-1.5 text-slate-400">
               <li>Harassment Threat Detector</li>
-              <li>VoiceShield SOS & Detection</li>
+              <li>Live Location & Detection</li>
               <li>Tamper-Proof Evidence Locker</li>
               <li>Sakhi Companion (HerGuardian)</li>
               <li>Trusted Contact Escalation</li>

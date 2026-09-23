@@ -6,7 +6,12 @@ import {
   deskCandidates,
   excludePoolFromSecondary,
   mergePool,
+  NEWS_AUTO_SCROLL_HOLD_MS,
+  NEWS_AUTO_SCROLL_INTERVAL_MS,
+  NEWS_AUTO_SCROLL_TICK_MS,
   nextLeadIndex,
+  shouldAutoAdvance,
+  tickProgress,
   watchArticles,
 } from "@/lib/news/rotation";
 import type { NewsArticle } from "@/lib/news/types";
@@ -26,6 +31,7 @@ function article(id: string): NewsArticle {
     location: null,
     imageUrl: null,
     verifiedSource: false,
+    language: "en",
   };
 }
 
@@ -172,5 +178,88 @@ describe("buildNarration", () => {
       category: "",
     };
     expect(buildNarration(a)).toBe("Story a.");
+  });
+
+  it("narrates Hindi articles with a Hindi template, never English", () => {
+    const a: NewsArticle = {
+      ...article("a"),
+      language: "hi",
+      title: "ऑनलाइन ठगी में युवक से लाखों की धोखाधड़ी",
+      summary: "पुलिस ने मामला दर्ज कर जांच शुरू कर दी है।",
+      sourceName: "Navbharat Times",
+      category: "Financial fraud",
+      publishedAt: "2026-09-16T04:30:00.000Z",
+      location: "मुंबई",
+    };
+    const text = buildNarration(a);
+    expect(text).toContain("ऑनलाइन ठगी में युवक से लाखों की धोखाधड़ी।");
+    expect(text).toContain("Navbharat Times के अनुसार।");
+    expect(text).toContain("स्थान: मुंबई।");
+    expect(text).not.toContain("According to");
+    expect(text).not.toContain("Published ");
+    expect(text).toMatch(/[\u0900-\u097F]/);
+  });
+});
+
+describe("auto-scroll cadence", () => {
+  it("defaults to the 8–10 second window", () => {
+    expect(NEWS_AUTO_SCROLL_INTERVAL_MS).toBeGreaterThanOrEqual(8000);
+    expect(NEWS_AUTO_SCROLL_INTERVAL_MS).toBeLessThanOrEqual(10000);
+    expect(NEWS_AUTO_SCROLL_TICK_MS).toBeLessThan(NEWS_AUTO_SCROLL_INTERVAL_MS);
+  });
+
+  it("advances progress by one tick per step", () => {
+    expect(tickProgress(0)).toBeCloseTo(
+      NEWS_AUTO_SCROLL_TICK_MS / NEWS_AUTO_SCROLL_INTERVAL_MS,
+      9
+    );
+    expect(tickProgress(0.5)).toBeCloseTo(
+      0.5 + NEWS_AUTO_SCROLL_TICK_MS / NEWS_AUTO_SCROLL_INTERVAL_MS,
+      9
+    );
+  });
+
+  it("advances only when idle, multi-card, and unpaused", () => {
+    const open = {
+      narrating: false,
+      exiting: false,
+      userPaused: false,
+      msSinceInteraction: NEWS_AUTO_SCROLL_HOLD_MS + 1,
+      reducedMotion: false,
+      poolSize: 3,
+    };
+    expect(shouldAutoAdvance(open)).toBe(true);
+  });
+
+  it("freezes during narration, exit, explicit pause, or recent interaction", () => {
+    const base = {
+      narrating: false,
+      exiting: false,
+      userPaused: false,
+      msSinceInteraction: NEWS_AUTO_SCROLL_HOLD_MS + 1,
+      reducedMotion: false,
+      poolSize: 3,
+    };
+    expect(shouldAutoAdvance({ ...base, narrating: true })).toBe(false);
+    expect(shouldAutoAdvance({ ...base, exiting: true })).toBe(false);
+    expect(shouldAutoAdvance({ ...base, userPaused: true })).toBe(false);
+    expect(
+      shouldAutoAdvance({ ...base, msSinceInteraction: NEWS_AUTO_SCROLL_HOLD_MS - 1 })
+    ).toBe(false);
+    expect(shouldAutoAdvance({ ...base, msSinceInteraction: 0 })).toBe(false);
+  });
+
+  it("never advances with reduced motion or a single card", () => {
+    const base = {
+      narrating: false,
+      exiting: false,
+      userPaused: false,
+      msSinceInteraction: Number.MAX_SAFE_INTEGER,
+      reducedMotion: false,
+      poolSize: 3,
+    };
+    expect(shouldAutoAdvance({ ...base, reducedMotion: true })).toBe(false);
+    expect(shouldAutoAdvance({ ...base, poolSize: 1 })).toBe(false);
+    expect(shouldAutoAdvance({ ...base, poolSize: 0 })).toBe(false);
   });
 });

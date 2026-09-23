@@ -25,6 +25,8 @@ export interface ChatMessage {
   timestamp: string;
   category?: "emergency" | "legal" | "evidence" | "emotional" | "scam" | "general" | "education";
   quickActions?: { label: string; actionType: string; payload?: string }[];
+  /** Short source labels the AI cited (helplines, case evidence, reports…). */
+  citedSources?: string[];
 }
 
 export interface ChatContextFragment {
@@ -103,14 +105,19 @@ function normalizeForLanguage(text: string): string {
     .trim();
 }
 
-/** If the user explicitly asks for a language ("tell me in Hindi"), that wins. */
+/** If the user explicitly asks for a language, that wins for this turn. */
 export function explicitLanguageRequest(text: string): SakhiLanguage | null {
   const s = text.toLowerCase().trim();
-  const mention =
-    /(?:in|mein|में|\bto\b|translate|convert|hindi|hinglish)\b.{0,40}/i;
   if (/हिंदी|हिन्दी|हिंलीश/.test(s)) return "hi";
   if (/(?:in|mein|में)\s+hinglish|hinglish\s+(?:mein|में)|speak\s+hinglish/i.test(s)) return "hinglish";
   if (/(?:in|mein|में)\s+hindi|hindi\s+(?:mein|में)|translate\s+.*\bto\s+hindi|tell\s+.*\bin\s+hindi|reply\s+.*\bin\s+hindi|answer\s+.*\bin\s+hindi|batao\s+hindi|hindhi/i.test(s)) return "hi";
+  // Explicit English requests (previously undetected — an English "reply in
+  // English" was silently ignored under a Hindi pin). Verb-anchored so that
+  // merely mentioning the word English ("is this English email a scam?")
+  // does NOT flip the turn language.
+  if (/(reply|answer|tell|respond|speak|talk|write|explain|translate|convert)\b.{0,30}\b(in|to|into)\s+english/i.test(s)) return "en";
+  if (/english\s+(mein|me|main)\b/i.test(s)) return "en";
+  if (/अंग्रेजी|अंग्रेज़ी|इंग्लिश/.test(s) && /(में|बताओ|बताइए|लिखो)/.test(s)) return "en";
   return null;
 }
 
@@ -133,6 +140,27 @@ export function detectLanguage(text: string): SakhiLanguage {
 export function normalizeLanguage(lang: unknown): SakhiLanguage {
   if (lang === "hi" || lang === "hinglish" || lang === "en") return lang;
   return "en";
+}
+
+/**
+ * Resolve which language Sakhi replies in for exactly ONE turn.
+ *
+ * Smart-switch precedence (the single EN/हिं toggle is a *preference*,
+ * never a stale lock):
+ *   1. an explicit in-message request ("tell me in Hindi") always wins,
+ *      even over the toggle — the user just asked for it;
+ *   2. otherwise the toggle pin ("en" | "hi" | "hinglish") wins;
+ *   3. otherwise the message is auto-detected.
+ * Invalid/absent pins are ignored (fall back to detection).
+ */
+export function resolveTurnLanguage(
+  pin: SakhiLanguage | null | undefined,
+  message: string
+): SakhiLanguage {
+  const explicit = explicitLanguageRequest(message);
+  if (explicit) return explicit;
+  if (pin === "en" || pin === "hi" || pin === "hinglish") return pin;
+  return detectLanguage(message);
 }
 
 function headlineOf(category: IncidentCategory): string {
@@ -175,7 +203,7 @@ export function analyzeIncident(userQuery: string): IncidentAnalysis {
   const hasSafetySignal =
     /cyber|hack|scam|fraud|phish|spam|otp|password|upi|bank|card|upi|virus|malware|stalk|harass|blackmail|leak|extort|photo|screenshot|evidence|locker|safe|safety|threat|danger|unsafe|bully|privacy|account|login|secure|recover|report|law|legal|police|fir|cybercrime|helpline|call|message|email|link|wifi|network|app|download|sos|phone/i;
   const guardrailStrong =
-    /weather|temperature|recipe|cook|food|chicken|paneer|pizza|burger|cinema|movie|song|music|celebrity|actor|sport|cricket|football|simple math|2\+2|5\+5|homework|algebra|science fair|coding question|how do i code|python|javascript|gossip|shopping|flipkart|amazon order|travel plan|booking|movie ticket|other language translation|translate this word|what is your name origin/i;
+    /weather|temperature|recipe|cook|food|chicken|paneer|pizza|burger|cinema|movie|song|music|celebrity|actor|sport|cricket|football|simple math|2\+2|5\+5|homework|algebra|science fair|coding question|how do i code|python|javascript|gossip|shopping|flipkart|amazon order|travel plan|booking|movie ticket|other language translation|translate this word|translate.{0,30}\b(to|into)\b\s+(french|spanish|german|tamil|telugu|marathi|kannada|malayalam|bengali|japanese|chinese|arabic|urdu|portuguese|italian|russian)|what is your name origin/i;
 
   if (guardrailStrong.test(q) && !hasSafetySignal.test(q)) {
     category = "guardrail";
@@ -244,6 +272,39 @@ export function analyzeIncident(userQuery: string): IncidentAnalysis {
 
   const actionable = !["greeting", "guardrail", "emotional", "followup", "legal"].includes(category);
   return { category, tags, headline: headlineOf(category), confidence: category === "general" ? "low" : "high", actionable };
+}
+
+/**
+ * Cybersecurity-only scope guard — a deterministic, server-enforced gate that
+ * runs BEFORE any LLM call. It blocks only queries that are CLEARLY off-topic
+ * (weather, recipes, movies, sports, homework, other-language translation …)
+ * and carry no cyber/safety signal at all. Queries with no signal one way or
+ * the other (or any safety marker) still go to the LLM — over-blocking a real
+ * survivor, especially in Devanagari, would be worse than letting the model
+ * politely redirect. Never blocks greetings, follow-ups, emergencies or Hindi.
+ */
+export interface ScopeGuardResult {
+  blocked: boolean;
+  code?: "off-topic";
+}
+
+export function scopeGuard(userQuery: string): ScopeGuardResult {
+  const analysis = analyzeIncident(userQuery);
+  if (analysis.category === "guardrail" && analysis.tags.includes("out-of-scope")) {
+    return { blocked: true, code: "off-topic" };
+  }
+  return { blocked: false };
+}
+
+/** Polite, bilingual refusal for an out-of-scope query — no LLM involved. */
+export function scopeGuardReply(lang: SakhiLanguage): string {
+  if (lang === "hi") {
+    return "मैं साइबर सुरक्षा के लिए यहाँ हूँ — फ़िशिंग, फ्रॉड, स्टॉकिंग, ब्लैकमेल, हैक किया गया अकाउंट, OTP घोटाले जैसी चीज़ों में मदद कर सकती हूँ। इस विषय पर मैं मदद नहीं कर सकती, लेकिन बताइए आपके साथ क्या हुआ, मैं ज़रूर देखूँगी।";
+  }
+  if (lang === "hinglish") {
+    return "Main cyber safety ke liye yahan hoon — phishing, fraud, stalking, blackmail, hacked account, OTP scams jaisi cheezon mein help kar sakti hoon. Is topic par main help nahi kar sakti, lekin bataiye aapke saath kya hua, main zaroor dekhoongi.";
+  }
+  return "I'm here for cyber safety — phishing, fraud, stalking, blackmail, hacked accounts, OTP scams and similar threats. I can't help with that topic, but tell me what happened and I'll take a look.";
 }
 
 function nowLabel(): string {

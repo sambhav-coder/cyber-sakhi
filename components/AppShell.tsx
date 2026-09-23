@@ -104,7 +104,7 @@ const TopBar: React.FC<{ onOpenSidebar: () => void; sidebarCollapsed: boolean }>
       </div>
 
       <div className="flex items-center gap-2.5 sm:gap-3">
-        {/* SOS button */}
+        {/* Live Location button */}
         <button
           type="button"
           onClick={() => setIsSosOpen(true)}
@@ -120,10 +120,10 @@ const TopBar: React.FC<{ onOpenSidebar: () => void; sidebarCollapsed: boolean }>
             clipPath:
               "polygon(0 0, 100% 0, 100% calc(100% - 6px), calc(100% - 6px) 100%, 0 100%)",
           }}
-          title="1-Tap Emergency SOS"
+          title="Live Location (one-time GPS capture)"
         >
           <AlertTriangle className="w-4 h-4 animate-pulse" />
-          <span className="hidden sm:inline tracking-[0.06em]">1-TAP SOS</span>
+          <span className="hidden sm:inline tracking-[0.06em]">LIVE LOCATION</span>
         </button>
 
         {/* User avatar + dropdown (only if authenticated) */}

@@ -67,11 +67,61 @@ function escapeRegExp(value: string): string {
 
 export function isRelevant(text: string): boolean {
   const t = text.toLowerCase();
-  return CORE_KEYWORDS.some((kw) => {
+  const english = CORE_KEYWORDS.some((kw) => {
     if (kw.indexOf(" ") !== -1) return t.includes(kw);
     return new RegExp(`\\b${escapeRegExp(kw)}\\w*`, "i").test(t);
   });
+  if (english) return true;
+  // Hindi relevance: Devanagari has no \b word boundaries, so substring
+  // matching on original-language cyber-crime vocabulary.
+  return CORE_KEYWORDS_HI.some((kw) => text.includes(kw));
 }
+
+/**
+ * Original-Hindi cyber-crime vocabulary (NBT/BBC Hindi wording). These are
+ * matched against ORIGINAL Hindi article text — never against translations.
+ */
+const CORE_KEYWORDS_HI: string[] = [
+  "साइबर",
+  "ऑनलाइन ठगी",
+  "ऑनलाइन धोखाधड़ी",
+  "धोखाधड़ी",
+  "ठगी",
+  "धोखा",
+  "फ्रॉड",
+  "स्कैम",
+  "फ़िशिंग",
+  "फिशिंग",
+  "हैक",
+  "हैकिंग",
+  "रैनसमवेयर",
+  "मैलवेयर",
+  "ब्लैकमेल",
+  "जबरन वसूली",
+  "डीपफेक",
+  "उत्पीड़न",
+  "पीछा",
+  "पहचान की चोरी",
+  "डेटा चोरी",
+  "डेटा लीक",
+  "नौकरी घोटाला",
+  "निवेश घोटाला",
+  "अश्लील",
+  "ओटीपी",
+  "यूपीआई",
+  "डिजिटल अरेस्ट",
+  "लोन ऐप",
+  "केवाईसी",
+  "आधार",
+  "सिम स्वैप",
+  "सायबर",
+  "अपराध",
+  "गिरफ्तार",
+  "पुलिस",
+  "मामला दर्ज",
+  "जांच",
+  "पीड़ित",
+];
 
 /**
  * Regulatory / policy stories about UPI and payments (e.g. merchant discount
@@ -348,11 +398,29 @@ export interface Classification {
 
 export function hasCrimeSignal(text: string): boolean {
   const t = text.toLowerCase();
-  return CRIME_SIGNAL_PHRASES.some((phrase) => {
+  const english = CRIME_SIGNAL_PHRASES.some((phrase) => {
     if (phrase.indexOf(" ") !== -1) return t.includes(phrase);
     return new RegExp(`\\b${escapeRegExp(phrase)}\\w*`, "i").test(t);
   });
+  if (english) return true;
+  return CRIME_SIGNAL_HI.some((phrase) => text.includes(phrase));
 }
+
+/** Hindi crime signals (original-language wording, substring matched). */
+const CRIME_SIGNAL_HI: string[] = [
+  "धोखाधड़ी",
+  "ठगी",
+  "गिरफ्तार",
+  "पुलिस",
+  "मामला दर्ज",
+  "जांच",
+  "पीड़ित",
+  "चोरी",
+  "हैक",
+  "अपराधी",
+  "साइबर सेल",
+  "एफआईआर",
+];
 
 export function classify(text: string): Classification | null {
   const t = text.toLowerCase();
@@ -372,8 +440,77 @@ export function classify(text: string): Classification | null {
       };
     }
   }
+  // Original-Hindi classification into the same English taxonomy.
+  for (const rule of CATEGORY_RULES_HI) {
+    const matched = rule.keywords.filter((kw) => text.includes(kw));
+    if (matched.length > 0) {
+      if (rule.requiresCrimeSignal && !hasCrimeSignal(text)) continue;
+      return {
+        category: rule.category,
+        tags: [...rule.tags, ...matched.slice(0, 2)].slice(0, 4),
+      };
+    }
+  }
   return null;
 }
+
+/**
+ * Hindi classification rules — same English category taxonomy, matched
+ * against original Hindi text. Order matters (specific before generic).
+ */
+const CATEGORY_RULES_HI: CategoryRule[] = [
+  {
+    category: "Digital arrest",
+    keywords: ["डिजिटल अरेस्ट", "फर्जी पुलिस", "पुलिस बनकर"],
+    tags: ["digital arrest"],
+  },
+  {
+    category: "Sextortion & blackmail",
+    keywords: ["ब्लैकमेल", "अश्लील वीडियो", "अश्लील फोटो", "न्यूड", "जबरन वसूली"],
+    tags: ["blackmail"],
+  },
+  {
+    category: "Phishing & identity theft",
+    keywords: ["फ़िशिंग", "फिशिंग", "नकली लिंक", "नकली वेबसाइट", "केवाईसी", "पहचान की चोरी", "आधार"],
+    tags: ["phishing"],
+  },
+  {
+    category: "Ransomware & hacking",
+    keywords: ["रैनसमवेयर", "मैलवेयर", "डेटा चोरी", "डेटा लीक", "सर्वर हैक", "डार्क वेब"],
+    tags: ["hacking"],
+  },
+  {
+    category: "Account takeover",
+    keywords: ["अकाउंट हैक", "खाता हैक", "सिम स्वैप", "व्हाट्सऐप हैक", "इंस्टाग्राम हैक"],
+    tags: ["account takeover"],
+  },
+  {
+    category: "Job scam",
+    keywords: ["नौकरी घोटाला", "घर बैठे काम", "टास्क फ्रॉड", "टेलीग्राम जॉब"],
+    tags: ["job scam"],
+  },
+  {
+    category: "Investment fraud",
+    keywords: ["निवेश घोटाला", "क्रिप्टो", "ट्रेडिंग ऐप", "पोंजी", "शेयर बाजार घोटाला"],
+    tags: ["investment fraud"],
+  },
+  {
+    category: "Cyberstalking",
+    keywords: ["पीछा", "उत्पीड़न", "ऑनलाइन उत्पीड़न", "धमकी भरे संदेश"],
+    tags: ["cyberstalking"],
+  },
+  {
+    category: "Financial fraud",
+    keywords: ["यूपीआई", "ओटीपी", "बैंक धोखाधड़ी", "लोन ऐप", "ऑनलाइन ठगी", "धोखाधड़ी", "ठगी", "डेबिट कार्ड", "क्रेडिट कार्ड"],
+    tags: ["financial fraud"],
+    requiresCrimeSignal: true,
+  },
+  {
+    category: "Cybercrime",
+    keywords: ["साइबर अपराध", "साइबर", "ऑनलाइन घोटाला", "साइबर सेल", "सायबर"],
+    tags: ["cybercrime"],
+  },
+];
 
 const INDIAN_PLACES: string[] = [
   "Andaman and Nicobar Islands",
@@ -474,11 +611,74 @@ const INDIAN_PLACES: string[] = [
   "Salem",
 ];
 
+/** Major Indian places in Devanagari for original-Hindi articles. */
+const INDIAN_PLACES_HI: string[] = [
+  "मुंबई",
+  "दिल्ली",
+  "नई दिल्ली",
+  "बेंगलुरु",
+  "हैदराबाद",
+  "चेन्नई",
+  "कोलकाता",
+  "पुणे",
+  "अहमदाबाद",
+  "जयपुर",
+  "लखनऊ",
+  "कानपुर",
+  "नागपुर",
+  "इंदौर",
+  "भोपाल",
+  "पटना",
+  "सूरत",
+  "कोच्चि",
+  "चंडीगढ़",
+  "रायपुर",
+  "रांची",
+  "देहरादून",
+  "श्रीनगर",
+  "आगरा",
+  "वाराणसी",
+  "नोएडा",
+  "गुरुग्राम",
+  "गाजियाबाद",
+  "फरीदाबाद",
+  "मेरठ",
+  "लुधियाना",
+  "अमृतसर",
+  "जोधपुर",
+  "उदयपुर",
+  "नाशिक",
+  "जबलपुर",
+  "ग्वालियर",
+  "गोवा",
+  "शिमला",
+  "महाराष्ट्र",
+  "गुजरात",
+  "कर्नाटक",
+  "केरल",
+  "पंजाब",
+  "हरियाणा",
+  "बिहार",
+  "राजस्थान",
+  "मध्य प्रदेश",
+  "उत्तर प्रदेश",
+  "पश्चिम बंगाल",
+  "तमिलनाडु",
+  "तेलंगाना",
+  "ओडिशा",
+  "असम",
+  "भारत",
+];
+
 export function extractLocation(text: string): string | null {
   const t = text.toLowerCase();
   const sorted = [...INDIAN_PLACES].sort((a, b) => b.length - a.length);
   for (const place of sorted) {
     if (t.includes(place.toLowerCase())) return place;
+  }
+  const sortedHi = [...INDIAN_PLACES_HI].sort((a, b) => b.length - a.length);
+  for (const place of sortedHi) {
+    if (text.includes(place)) return place;
   }
   return null;
 }

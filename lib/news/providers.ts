@@ -17,11 +17,21 @@ export function createProvider(feed: FeedConfig, fetcher: FetcherLike): NewsProv
 }
 
 /**
- * Verified working RSS feeds (tested 2026-09-19; every URL below returned RSS
- * with current items). Indian government sources (PIB, MHA, I4C / National
+ * Verified working RSS feeds.
+ *
+ * ENGLISH feeds (tested 2026-09-19; every URL below returned RSS with
+ * current items). Indian government sources (PIB, MHA, I4C / National
  * Cyber Crime Reporting Portal, CERT-In) do not currently expose public,
  * machine-readable feeds; add them here as `kind: "government"` when a
  * reliable feed/API becomes available — the pipeline already prioritises them.
+ *
+ * HINDI feeds (verified live 2026-09-23; each returned HTTP 200 RSS with
+ * current original-Hindi <item>s — never translations of English articles):
+ *   - BBC News Hindi (feeds.bbci.co.uk/hindi/rss.xml)
+ *   - Navbharat Times · India + Crime desks (original Hindi)
+ * Deliberately EXCLUDED: The Hindu Hindi feeder endpoint returns HTTP 200
+ * but currently yields zero <item>s, so it is documented here instead of
+ * being wired in (no silent empty source).
  */
 export const DEFAULT_NEWS_FEEDS: FeedConfig[] = [
   {
@@ -113,6 +123,43 @@ export const DEFAULT_NEWS_FEEDS: FeedConfig[] = [
     section: "Technology",
   },
 ];
+
+/** Original-Hindi feeds — fetched ONLY for the Hindi edition, never mixed. */
+export const HINDI_NEWS_FEEDS: FeedConfig[] = [
+  {
+    id: "bbc-hindi",
+    name: "BBC News Hindi",
+    kind: "news",
+    language: "hi",
+    feedUrl: "https://feeds.bbci.co.uk/hindi/rss.xml",
+    homeUrl: "https://www.bbc.com/hindi",
+    section: "India",
+  },
+  {
+    id: "nbt-india",
+    name: "Navbharat Times · India",
+    kind: "news",
+    language: "hi",
+    feedUrl: "https://navbharattimes.indiatimes.com/india/rssfeed/1564454.xml",
+    homeUrl: "https://navbharattimes.indiatimes.com/india/articlelist/1564454.cms",
+    section: "India",
+  },
+  {
+    id: "nbt-crime",
+    name: "Navbharat Times · Crime",
+    kind: "news",
+    language: "hi",
+    feedUrl: "https://navbharattimes.indiatimes.com/crime/rssfeed/93273647.xml",
+    homeUrl: "https://navbharattimes.indiatimes.com/crime/articlelist/93273647.cms",
+    section: "Crime",
+  },
+];
+
+/** Feeds for one language edition (env override applies to English only). */
+export function feedsForLanguage(language: "en" | "hi"): FeedConfig[] {
+  if (language === "hi") return HINDI_NEWS_FEEDS;
+  return feedListFromEnv();
+}
 
 export function feedListFromEnv(): FeedConfig[] {
   const override = (process.env.NEWS_FEED_URLS || "").trim();

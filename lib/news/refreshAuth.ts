@@ -32,10 +32,14 @@ export function authorizeRefresh(
   return { kind: "unauthorized", reason: header === null && bearer === null ? "missing" : "wrong" };
 }
 
-async function respondSuccess(service: Pick<NewsService, "getEdition">): Promise<Response> {
-  const edition = await service.getEdition({ force: true });
+async function respondSuccess(
+  service: Pick<NewsService, "getEdition">,
+  language: "en" | "hi"
+): Promise<Response> {
+  const edition = await service.getEdition({ force: true, language });
   return Response.json({
     ok: true,
+    language: edition.language,
     preparedAt: edition.preparedAt,
     fetchedAt: edition.fetchedAt,
     cacheStatus: edition.cacheStatus,
@@ -54,6 +58,21 @@ export function createRefreshHandler(deps?: {
   return async function handleRefresh(req: NextRequest): Promise<Response> {
     const config = resolveRefreshEnv(env);
     const auth = authorizeRefresh(req, config);
+    // req.url is always present on real NextRequests; unit-test doubles may
+    // omit it — treat that as "no lang param" (English default).
+    let langParam: string | null = null;
+    try {
+      langParam = new URL(req.url).searchParams.get("lang");
+    } catch {
+      langParam = null;
+    }
+    if (langParam !== null && langParam !== "en" && langParam !== "hi") {
+      return Response.json(
+        { error: "Unsupported news language. Use lang=en or lang=hi." },
+        { status: 400 }
+      );
+    }
+    const language = langParam === "hi" ? "hi" : "en";
 
     if (auth.kind === "unconfigured") {
       if (config.isProduction) {
@@ -62,7 +81,7 @@ export function createRefreshHandler(deps?: {
           { status: 503 }
         );
       }
-      return respondSuccess(service);
+      return respondSuccess(service, language);
     }
 
     if (auth.kind === "unauthorized") {
@@ -70,7 +89,7 @@ export function createRefreshHandler(deps?: {
       return Response.json({ error: "Unauthorized refresh request." }, { status });
     }
 
-    return respondSuccess(service);
+    return respondSuccess(service, language);
   };
 }
 

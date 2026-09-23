@@ -27,6 +27,32 @@ const MESSAGE_COLS =
   "id, conversation_id, role, content, attachment_meta, meta, created_at";
 const MEMORY_COLS = "id, owner_id, key, value, kind, sensitive, created_at, updated_at";
 
+/**
+ * Pure guard: Sakhi memory NEVER stores secrets. Keys that look like secrets
+ * (passwords, tokens, API/private keys, recovery codes…), or values that
+ * assign a secret-like label, are refused at save time.
+ */
+const FORBIDDEN_MEMORY_KEYS =
+  /password|passwd|\bpwd\b|secret|api[_-]?key|private[_-]?key|auth[_-]?token|access[_-]?token|bearer\b|recovery[_-]?code|\botp\b|credential|seed[_-]?phrase/i;
+const FORBIDDEN_MEMORY_VALUES =
+  /(password|passwd|secret|api[_-]?key|private[_-]?key|auth[_-]?token|access[_-]?token|bearer|\botp\b|seed[_-]?phrase)\s*[=:]\s*\S+/i;
+
+export function isForbiddenMemoryContent(key: string, value: string): boolean {
+  return FORBIDDEN_MEMORY_KEYS.test(key) || FORBIDDEN_MEMORY_VALUES.test(value);
+}
+
+/**
+ * Pure filter of memory rows that may be surfaced to the model. Stored
+ * `sakhi.language*` preferences are never echoed into a prompt — language is
+ * decided per message by detection/override, so a past "prefer Hindi" row can
+ * never force a following English turn.
+ */
+export function filterMemoryForModel(
+  rows: { key: string; value: string }[]
+): { key: string; value: string }[] {
+  return rows.filter((m) => !/^sakhi\.language/i.test(m.key));
+}
+
 export async function createSakhiConversation(input: {
   ownerId: string;
   title?: string;
@@ -172,6 +198,9 @@ export async function saveSakhiMemory(input: {
   kind?: string;
   sensitive?: boolean;
 }): Promise<SakhiMemoryRow> {
+  if (isForbiddenMemoryContent(input.key, input.value)) {
+    throw new Error("Refusing to store secrets in Sakhi memory.");
+  }
   const existing = await getSakhiMemory(input.ownerId, input.key);
   if (existing) {
     const { data, error } = await getSupabaseServer()

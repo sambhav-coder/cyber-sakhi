@@ -95,6 +95,7 @@ export const GovLoginForm: React.FC<{ officers: GovRosterOfficerLike[] }> = ({ o
   const [selectedCode, setSelectedCode] = useState("");
   const [userId, setUserId] = useState("");
   const [password, setPassword] = useState("");
+  const [mfaCode, setMfaCode] = useState("");
   const [showPassword, setShowPassword] = useState(false);
   const [status, setStatus] = useState<FormStatus>("idle");
   const [errorMessage, setErrorMessage] = useState<string | null>(null);
@@ -121,7 +122,7 @@ export const GovLoginForm: React.FC<{ officers: GovRosterOfficerLike[] }> = ({ o
         const res = await fetch("/gov/api/login", {
           method: "POST",
           headers: { "Content-Type": "application/json" },
-          body: JSON.stringify({ email: userId.trim(), password }),
+          body: JSON.stringify({ email: userId.trim(), password, mfaCode }),
         });
         if (res.ok) {
           setStatus("redirecting");
@@ -163,6 +164,12 @@ export const GovLoginForm: React.FC<{ officers: GovRosterOfficerLike[] }> = ({ o
               <p className="mt-1 font-mono text-[10px] uppercase tracking-[0.18em] text-teal-300">
                 Government Portal — Authorised Access Only
               </p>
+            </div>
+
+            <div>
+              <label htmlFor="gov-mfa-code" className="gov-label">Authenticator code</label>
+              <input id="gov-mfa-code" type="text" name="mfaCode" inputMode="numeric" autoComplete="one-time-code" required pattern="[0-9]{6}" maxLength={6} value={mfaCode} onChange={(e) => { setMfaCode(e.target.value.replace(/\D/g, "")); setErrorMessage(null); }} className="gov-input" placeholder="6-digit code" disabled={busy} />
+              <p className="gov-hint mt-1.5">Enter the current code from your enrolled authenticator app.</p>
             </div>
           </div>
 

@@ -44,6 +44,8 @@ export interface GeminiReasonInput {
   caseContext?: Record<string, unknown>;
   /** Real image content delivered to Gemini inline (multimodal), not filenames. */
   images?: GeminiImageInput[];
+  /** Pre-rendered <DATA><RAG> retrieval block (lib/rag). Empty = no grounding. */
+  ragBlock?: string;
 }
 
 export interface GeminiReplySpec {
@@ -201,7 +203,7 @@ function turnLanguageInstruction(lang: SakhiLanguage): string {
   ].join(" ");
 }
 
-function buildUserPrompt(input: GeminiReasonInput): string {
+export function buildUserPrompt(input: GeminiReasonInput): string {
   const parts: string[] = [];
   const ctx = input.context;
 
@@ -234,6 +236,9 @@ function buildUserPrompt(input: GeminiReasonInput): string {
     parts.push(
       `<DATA><REPORTS>\n${ctx.reportBriefs.join("\n")}\n</REPORTS></DATA>`
     );
+  }
+  if (input.ragBlock && input.ragBlock.trim().length > 0) {
+    parts.push(input.ragBlock);
   }
   if (input.caseContext && Object.keys(input.caseContext).length > 0) {
     parts.push(caseContextBlock(input.caseContext));

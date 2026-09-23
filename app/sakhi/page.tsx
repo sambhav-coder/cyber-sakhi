@@ -1,5 +1,5 @@
 import { Suspense } from "react";
-import { SakhiHub } from "@/components/companion/SakhiHub";
+import { EntryLanguageGate } from "@/components/companion/EntryLanguageGate";
 
 export const dynamic = "force-dynamic";
 
@@ -11,13 +11,13 @@ export default function SakhiHubPage() {
           <div className="text-center space-y-3">
             <div className="w-10 h-10 mx-auto border-2 border-emergency-400 border-t-transparent rounded-full animate-spin" />
             <p className="text-[11px] uppercase tracking-[0.24em] text-slate-500 font-bold">
-              Opening Sakhi's hub…
+              Opening Sakhi&apos;s hub…
             </p>
           </div>
         </div>
       }
     >
-      <SakhiHub />
+      <EntryLanguageGate />
     </Suspense>
   );
 }

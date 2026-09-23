@@ -2,19 +2,19 @@ import { NextRequest, NextResponse } from "next/server";
 import { getServerSession } from "next-auth";
 import { authOptions } from "@/lib/authOptions";
 import { getSttSlotStatus } from "@/lib/voice/serverConfig";
-import { localSttAvailable, localSttTranscribe } from "@/lib/voice/localPiper";
 
 /**
  * POST /api/voice/stt — server transcription slot.
  *
- * Order of preference (mirrors the TTS route):
- *   1. LOCAL — off-line Vosk on the warm voice sidecar. Free, private, no
- *      cloud, no Gemini. Audio is PCM16 ~16 kHz mono WAV (JSON `audioB64`) or
- *      a multipart `audio` file.
- *   2. UPSTREAM — only when SAKHI_STT_PROVIDER + SAKHI_STT_ENDPOINT +
+ * Node-only voice policy: there is NO local Python/Vosk sidecar. Audio is
+ * PCM16 ~16 kHz mono WAV (JSON `audioB64`) or a multipart `audio` file.
+ *
+ * Order of preference:
+ *   1. UPSTREAM — only when SAKHI_STT_PROVIDER + SAKHI_STT_ENDPOINT +
  *      SAKHI_STT_API_KEY are explicitly configured.
- *   3. Otherwise an honest 501; the client falls back to browser speech or
- *      typing. API keys never reach the browser.
+ *   2. Otherwise an honest 501; the client uses on-device browser speech
+ *      recognition (SpeechRecognition) or the user types. API keys never
+ *      reach the browser.
  *
  * No Gemini is ever used for speech-to-text (product policy).
  */
@@ -52,40 +52,7 @@ export async function POST(req: NextRequest) {
       );
     }
 
-    // 1) Local off-line Vosk first.
-    const local = localSttAvailable();
-    if (local) {
-      const result = await localSttTranscribe(audioB64, language);
-      if (result && result.text) {
-        return NextResponse.json({
-          transcript: result.text,
-          source: "local",
-          model: result.model,
-          language,
-          stt_ms: result.sttMs,
-        });
-      }
-      if (result) {
-        // Sidecar answered but heard nothing — not an infra error.
-        return NextResponse.json({
-          transcript: "",
-          source: "local",
-          model: result.model,
-          language,
-          stt_ms: result.sttMs,
-        });
-      }
-      return NextResponse.json(
-        {
-          available: false,
-          code: "stt_local_error",
-          note: "The local speech engine could not transcribe this audio.",
-        },
-        { status: 502 }
-      );
-    }
-
-    // 2) Optional explicit upstream slot.
+    // 1) Optional explicit upstream slot.
     const slot = getSttSlotStatus();
     if (slot.available && process.env.SAKHI_STT_ENDPOINT && process.env.SAKHI_STT_API_KEY) {
       const endpoint = process.env.SAKHI_STT_ENDPOINT.trim();
@@ -135,7 +102,7 @@ export async function POST(req: NextRequest) {
       return NextResponse.json({ transcript, source: "upstream" });
     }
 
-    // 3) Honest 501.
+    // 2) Honest 501.
     return NextResponse.json(
       { available: false, code: "stt_unconfigured", note: slot.note },
       { status: 501 }

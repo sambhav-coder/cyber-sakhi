@@ -28,104 +28,217 @@ import {
 } from "react";
 import { TalkingHead } from "@met4citizen/talkinghead";
 import { LipsyncEn } from "@met4citizen/talkinghead/modules/lipsync-en.mjs";
+import {
+  ANALYSER_FFT_SIZE,
+  jawOpenForLevel,
+  rmsFromTimeDomain,
+  smoothLevel,
+} from "@/lib/voice/audioSync";
 
-const SAKHI_GLB = "/assets/design/sakhi.glb";
+import {
+  DEFAULT_AVATAR_ID,
+  getAvatarPreset,
+  summarizeRig,
+  type RigReport,
+} from "@/lib/avatar/presets";
+
+const DEFAULT_MODEL_URL = "/assets/design/sakhi-officer.glb";
 
 // Web Speech exposes no audio timestamps, so we drive the viseme timeline with
-// an estimated character rate. onEnd() always cancels the remainder (speakEnd),
-// so the mouth can never outrun the real audio.
+// an estimated character rate if exact timestamps are not supplied.
 const CHARS_PER_SECOND = 15.5;
 const TAIL_PAD_MS = 320;
 
+export interface WordTimingItem {
+  text: string;
+  startMs: number;
+  endMs: number;
+}
+
+/**
+ * Converts Devanagari Hindi text to phonetically equivalent Roman characters
+ * so TalkingHead's English G2P rules can extract natural Oculus visemes
+ * for Hindi and Hinglish speech.
+ */
+function devanagariToPhoneticRoman(text: string): string {
+  if (!/[\u0900-\u097F]/.test(text)) return text;
+
+  const VOWELS: Record<string, string> = {
+    "अ": "a", "आ": "aa", "इ": "i", "ई": "ee", "उ": "u", "ऊ": "oo",
+    "ऋ": "ri", "ए": "e", "ऐ": "ai", "ओ": "o", "औ": "au", "अं": "an", "अः": "ah"
+  };
+  const MATRAS: Record<string, string> = {
+    "ा": "aa", "ि": "i", "ी": "ee", "ु": "u", "ू": "oo", "ृ": "ri",
+    "े": "e", "ै": "ai", "ो": "o", "ौ": "au", "ं": "n", "ः": "h", "ँ": "n"
+  };
+  const CONSONANTS: Record<string, string> = {
+    "क": "k", "ख": "kh", "ग": "g", "घ": "gh", "ङ": "ng",
+    "च": "ch", "छ": "chh", "ज": "j", "झ": "jh", "ञ": "ny",
+    "ट": "t", "ठ": "th", "ड": "d", "ढ": "dh", "ण": "n",
+    "त": "t", "थ": "th", "द": "d", "ध": "dh", "न": "n",
+    "प": "p", "फ": "ph", "ब": "b", "भ": "bh", "म": "m",
+    "य": "y", "र": "r", "ल": "l", "व": "v",
+    "श": "sh", "ष": "sh", "स": "s", "ह": "h",
+    "क़": "q", "ख़": "kh", "ग़": "gh", "ज़": "z", "ड़": "r", "ढ़": "rh", "फ़": "f"
+  };
+  const VIRAMA = "्";
+
+  let res = "";
+  const chars = Array.from(text);
+  for (let i = 0; i < chars.length; i++) {
+    const c = chars[i];
+    if (VOWELS[c]) {
+      res += VOWELS[c];
+    } else if (CONSONANTS[c]) {
+      const next = chars[i + 1];
+      if (next === VIRAMA) {
+        res += CONSONANTS[c];
+        i++; // skip virama
+      } else if (next && MATRAS[next]) {
+        res += CONSONANTS[c] + MATRAS[next];
+        i++; // skip matra
+      } else {
+        res += CONSONANTS[c] + "a";
+      }
+    } else if (MATRAS[c]) {
+      res += MATRAS[c];
+    } else {
+      res += c;
+    }
+  }
+  return res;
+}
+
 /**
  * Converts a timed-word track into TalkingHead viseme animation events using
- * the library's own English G2P module, then pushes them straight onto the
- * engine's animQueue. This is the SAME entry shape speakAudio() produces
- * (talkinghead.mjs `speakAudio` -> `template:{name:'viseme'}`, ts =
- * [rise, hold, release]) and the slide's 'viseme_*' morph targets are driven
- * by the engine's animation clock — real per-phoneme mouth shapes, no timers.
- *
- * We bypass the Web Audio playlist on purpose: that path only queues visemes
- * once a WebAudio buffer is actually PLAYING, and browsers keep the
- * AudioContext suspended until a user gesture, so an auto-run intro (no
- * gesture) would silently drop every viseme. Directly scheduling the same
- * visemes decouples the mouth from autoplay policy while speech (via page
- * TTS onStart/onEnd) stays the source of truth for WHEN she talks.
+ * the library's English G2P module (with Devanagari phonetic conversion), then
+ * pushes them straight onto the engine's animQueue. If exact word timings from
+ * Edge TTS are provided, each word's visemes are scheduled with exact millisecond
+ * start and duration, with natural relaxation during speech pauses.
  */
-function pushG2pVisemes(head: any, sentence: string): boolean {
+function pushG2pVisemes(
+  head: any,
+  sentence: string,
+  wordTimings?: WordTimingItem[] | null
+): boolean {
   if (!head?.lipsyncWordsToVisemes || !head?.lipsyncPreProcessText) return false;
 
-  // Clean punctuation ourselves BEFORE G2P: the lib expands '?', '%', '&' …
-  // into spoken words (" question mark ") which the real voice never says,
-  // which would add ghost mouth movement.
-  const cleaned = sentence
-    .replace(/[?%&+$]/g, " ")
-    .replace(/[^\p{L}\p{N}'\s-]/gu, " ")
-    .replace(/\s+/g, " ")
-    .trim();
-  const words = cleaned.split(/\s+/).filter(Boolean);
-  if (!words.length) return false;
-
-  const totalChars = words.join("").length;
-  const estMs = Math.max(1100, Math.round((totalChars / CHARS_PER_SECOND) * 1000) + TAIL_PAD_MS);
-  const charUnit = estMs / Math.max(1, totalChars);
-
-  const wtimes: number[] = [];
-  const wdurations: number[] = [];
-  let cursor = 0;
-  for (const word of words) {
-    const dur = Math.max(90, Math.round(word.length * charUnit));
-    wtimes.push(cursor);
-    wdurations.push(dur);
-    cursor += dur;
-  }
-  const scale = estMs / Math.max(1, cursor);
-  for (let i = 0; i < wdurations.length; i += 1) {
-    wdurations[i] = Math.round(wdurations[i] * scale);
-    if (i > 0) wtimes[i] = wtimes[i - 1] + wdurations[i - 1];
-  }
-
-  // Start the track just after the current animation clock so no early event
-  // is skipped by the engine (which guards `animClock < x.ts[0]; continue`).
   const base = head.animClock + 24;
   const entries: any[] = [];
 
-  for (let i = 0; i < words.length; i += 1) {
-    const word = words[i];
-    const time = wtimes[i];
-    let duration = wdurations[i];
-    if (!word.length || !duration) continue;
+  if (Array.isArray(wordTimings) && wordTimings.length > 0) {
+    // ---- EXACT WORD-TIMED LIP-SYNC (Edge TTS synthesis) ----
+    for (let i = 0; i < wordTimings.length; i += 1) {
+      const wt = wordTimings[i];
+      const rawText = wt.text || "";
+      const phonetic = devanagariToPhoneticRoman(rawText);
+      const cleaned = phonetic
+        .replace(/[?%&+$]/g, " ")
+        .replace(/[^\p{L}\p{N}'\s-]/gu, " ")
+        .replace(/\s+/g, " ")
+        .trim();
+      if (!cleaned.length) continue;
 
-    let val: any = null;
-    try {
-      val = head.lipsyncWordsToVisemes(head.lipsyncPreProcessText(word, "en"), "en");
-    } catch {
-      continue;
+      const time = Math.max(0, wt.startMs);
+      const duration = Math.max(90, wt.endMs - wt.startMs);
+
+      let val: any = null;
+      try {
+        val = head.lipsyncWordsToVisemes(head.lipsyncPreProcessText(cleaned, "en"), "en");
+      } catch {
+        continue;
+      }
+      if (!val || !val.visemes || !val.visemes.length) continue;
+
+      const dTotal = val.times[val.visemes.length - 1] + val.durations[val.visemes.length - 1];
+      if (!(dTotal > 0)) continue;
+
+      const overdrive = Math.min(duration, Math.max(0, duration - val.visemes.length * 140));
+      const level = 0.65 + (duration > 0 ? (overdrive / duration) * 0.35 : 0);
+      const durTarget = Math.min(duration, val.visemes.length * 180);
+
+      for (let j = 0; j < val.visemes.length; j += 1) {
+        const tt = time + (val.times[j] / dTotal) * durTarget;
+        const d = (val.durations[j] / dTotal) * durTarget;
+        const viseme = val.visemes[j];
+        const peak = viseme === "PP" || viseme === "FF" ? 0.92 : level;
+        entries.push({
+          template: { name: "viseme" },
+          ts: [
+            base + tt - Math.min(50, (2 * d) / 3),
+            base + tt + Math.min(25, d / 2),
+            base + tt + d + Math.min(50, d / 2),
+          ],
+          vs: { ["viseme_" + viseme]: [null, peak, 0] },
+        });
+      }
     }
-    if (!val || !val.visemes || !val.visemes.length) continue;
+  } else {
+    // ---- ESTIMATED TIMING FALLBACK (SpeechSynthesis fallback) ----
+    const phoneticSentence = devanagariToPhoneticRoman(sentence);
+    const cleaned = phoneticSentence
+      .replace(/[?%&+$]/g, " ")
+      .replace(/[^\p{L}\p{N}'\s-]/gu, " ")
+      .replace(/\s+/g, " ")
+      .trim();
+    const words = cleaned.split(/\s+/).filter(Boolean);
+    if (!words.length) return false;
 
-    const dTotal = val.times[val.visemes.length - 1] + val.durations[val.visemes.length - 1];
-    if (!(dTotal > 0)) continue;
+    const totalChars = words.join("").length;
+    const estMs = Math.max(1100, Math.round((totalChars / CHARS_PER_SECOND) * 1000) + TAIL_PAD_MS);
+    const charUnit = estMs / Math.max(1, totalChars);
 
-    // Same intensity scheduling as the library: longer words mouth wider.
-    const overdrive = Math.min(duration, Math.max(0, duration - val.visemes.length * 150));
-    const level = 0.6 + (duration > 0 ? (overdrive / duration) * 0.4 : 0);
-    const durTarget = Math.min(duration, val.visemes.length * 200);
+    const wtimes: number[] = [];
+    const wdurations: number[] = [];
+    let cursor = 0;
+    for (const word of words) {
+      const dur = Math.max(90, Math.round(word.length * charUnit));
+      wtimes.push(cursor);
+      wdurations.push(dur);
+      cursor += dur;
+    }
+    const scale = estMs / Math.max(1, cursor);
+    for (let i = 0; i < wdurations.length; i += 1) {
+      wdurations[i] = Math.round(wdurations[i] * scale);
+      if (i > 0) wtimes[i] = wtimes[i - 1] + wdurations[i - 1];
+    }
 
-    for (let j = 0; j < val.visemes.length; j += 1) {
-      const tt = time + (val.times[j] / dTotal) * durTarget;
-      const d = (val.durations[j] / dTotal) * durTarget;
-      const viseme = val.visemes[j];
-      const peak = viseme === "PP" || viseme === "FF" ? 0.9 : level;
-      entries.push({
-        template: { name: "viseme" },
-        ts: [
-          base + tt - Math.min(60, (2 * d) / 3),
-          base + tt + Math.min(25, d / 2),
-          base + tt + d + Math.min(60, d / 2),
-        ],
-        vs: { ["viseme_" + viseme]: [null, peak, 0] },
-      });
+    for (let i = 0; i < words.length; i += 1) {
+      const word = words[i];
+      const time = wtimes[i];
+      let duration = wdurations[i];
+      if (!word.length || !duration) continue;
+
+      let val: any = null;
+      try {
+        val = head.lipsyncWordsToVisemes(head.lipsyncPreProcessText(word, "en"), "en");
+      } catch {
+        continue;
+      }
+      if (!val || !val.visemes || !val.visemes.length) continue;
+
+      const dTotal = val.times[val.visemes.length - 1] + val.durations[val.visemes.length - 1];
+      if (!(dTotal > 0)) continue;
+
+      const overdrive = Math.min(duration, Math.max(0, duration - val.visemes.length * 150));
+      const level = 0.6 + (duration > 0 ? (overdrive / duration) * 0.4 : 0);
+      const durTarget = Math.min(duration, val.visemes.length * 200);
+
+      for (let j = 0; j < val.visemes.length; j += 1) {
+        const tt = time + (val.times[j] / dTotal) * durTarget;
+        const d = (val.durations[j] / dTotal) * durTarget;
+        const viseme = val.visemes[j];
+        const peak = viseme === "PP" || viseme === "FF" ? 0.9 : level;
+        entries.push({
+          template: { name: "viseme" },
+          ts: [
+            base + tt - Math.min(60, (2 * d) / 3),
+            base + tt + Math.min(25, d / 2),
+            base + tt + d + Math.min(60, d / 2),
+          ],
+          vs: { ["viseme_" + viseme]: [null, peak, 0] },
+        });
+      }
     }
   }
 
@@ -141,6 +254,9 @@ function pushG2pVisemes(head: any, sentence: string): boolean {
   }
 
   head.animQueue.push(...entries);
+  if (process.env.NODE_ENV === "development") {
+    console.log("[PROD-LIPSYNC] Visemes pushed to animQueue:", entries.length);
+  }
   return true;
 }
 
@@ -250,19 +366,33 @@ function debugFrameSample(head: any, _dt?: number) {
 }
 
 export interface LiveSakhiAvatarHandle {
-  /** Begin lip-syncing `sentence` — call on TTS onStart. */
-  speakStart: (sentence: string) => void;
+  /** Begin lip-syncing `sentence` with optional exact `wordTimings` — call on TTS onStart. */
+  speakStart: (sentence: string, wordTimings?: WordTimingItem[]) => void;
   /** Stop all mouth activity — call on TTS onEnd/onError/cancel. */
   speakEnd: () => void;
   /** Switch Sakhi's expression (maps onto a TalkingHead mood). */
   setExpression: (expression: SakhiExpression) => void;
+  /**
+   * REAL audio-driven jaw: attach the live Edge-TTS <audio> element. A
+   * WebAudio AnalyserNode measures the ACTUAL playback signal every frame
+   * and writes the `jawOpen` morph directly — the mouth moves if and only
+   * if real audio energy is playing. Pass null (or call detachAudio) when
+   * the element ends or is cancelled. No-op for the speechSynthesis
+   * fallback path (the browser exposes no audio buffer there; G2P visemes
+   * from speakStart still apply).
+   */
+  attachAudioElement: (el: HTMLAudioElement | null) => void;
+  detachAudio: () => void;
 }
 
 interface LiveSakhiAvatarProps {
   isSpeaking: boolean;
   reducedMotion: boolean;
   className?: string;
+  modelUrl?: string;
+  pipelineState?: string;
   onStatus?: (status: SakhiAvatarStatus) => void;
+  onRigReport?: (report: RigReport) => void;
 }
 
 function moodBaseline(expression: SakhiExpression): Record<string, number> {
@@ -383,7 +513,14 @@ function buildMoods(head: any) {
 
 export const LiveSakhiAvatar = forwardRef<LiveSakhiAvatarHandle, LiveSakhiAvatarProps>(
   function LiveSakhiAvatar(
-    { isSpeaking, reducedMotion, className = "", onStatus },
+    {
+      isSpeaking,
+      reducedMotion,
+      className = "",
+      modelUrl = DEFAULT_MODEL_URL,
+      onStatus,
+      onRigReport,
+    },
     ref
   ) {
     const containerRef = useRef<HTMLDivElement>(null);
@@ -392,8 +529,17 @@ export const LiveSakhiAvatar = forwardRef<LiveSakhiAvatarHandle, LiveSakhiAvatar
     const statusRef = useRef(onStatus);
     const statusNowRef = useRef<SakhiAvatarStatus>("loading");
     const lastPushRef = useRef<Record<string, unknown> | null>(null);
-    const pendingSentenceRef = useRef<string | null>(null);
+    const pendingSpeechRef = useRef<{ sentence: string; wordTimings?: WordTimingItem[] } | null>(null);
     const pendingExpressionRef = useRef<SakhiExpression | null>(null);
+    const pendingAudioElRef = useRef<HTMLAudioElement | null>(null);
+    // ---- real-audio jaw sync (Edge TTS path) ----
+    const audioCtxRef = useRef<AudioContext | null>(null);
+    const analyserRef = useRef<AnalyserNode | null>(null);
+    const audioElRef = useRef<HTMLAudioElement | null>(null);
+    const audioRafRef = useRef<number | null>(null);
+    const audioLevelRef = useRef(0);
+    const audioSourcesRef = useRef(new WeakMap<HTMLAudioElement, MediaElementAudioSourceNode>());
+    const jawTargetsRef = useRef<{ mesh: any; index: number }[] | null>(null);
 
     const [status, setStatus] = useState<SakhiAvatarStatus>("loading");
     const [errMsg, setErrMsg] = useState<string | null>(null);
@@ -406,17 +552,146 @@ export const LiveSakhiAvatar = forwardRef<LiveSakhiAvatarHandle, LiveSakhiAvatar
       statusRef.current?.(next);
     };
 
+    const writeJaw = (value: number) => {
+      const head = headRef.current;
+      if (!head) return;
+
+      // 1. Update TalkingHead internal morph system so jaw moves in sync
+      try {
+        if (head.mtAvatar && head.mtAvatar["jawOpen"]) {
+          head.mtAvatar["jawOpen"].realtime = value;
+          head.mtAvatar["jawOpen"].needsUpdate = true;
+        } else if (typeof head.setValue === "function") {
+          head.setValue("jawOpen", value);
+        }
+      } catch { /* noop */ }
+
+      // 2. Direct Three.js mesh morphTargetInfluences fallback on Wolf3D_Head & Wolf3D_Teeth
+      try {
+        if (head.armature) {
+          if (!jawTargetsRef.current) {
+            const list: { mesh: any; index: number }[] = [];
+            head.armature.traverse((child: any) => {
+              if (child.morphTargetDictionary && child.morphTargetInfluences) {
+                const idx = child.morphTargetDictionary["jawOpen"];
+                if (typeof idx === "number") {
+                  list.push({ mesh: child, index: idx });
+                }
+              }
+            });
+            jawTargetsRef.current = list;
+          }
+          const targets = jawTargetsRef.current;
+          if (targets) {
+            for (let i = 0; i < targets.length; i++) {
+              if (targets[i].mesh.morphTargetInfluences) {
+                targets[i].mesh.morphTargetInfluences[targets[i].index] = value;
+              }
+            }
+          }
+        }
+      } catch { /* noop */ }
+    };
+
+    const stopAudioLoop = () => {
+      if (audioRafRef.current !== null) {
+        cancelAnimationFrame(audioRafRef.current);
+        audioRafRef.current = null;
+      }
+      if (analyserRef.current) {
+        try {
+          analyserRef.current.disconnect();
+        } catch { /* noop */ }
+        analyserRef.current = null;
+      }
+      audioElRef.current = null;
+      pendingAudioElRef.current = null;
+      audioLevelRef.current = 0;
+      try {
+        writeJaw(0);
+      } catch { /* never let lip-sync break the page */ }
+    };
+
+    const attachAudioElement = (el: HTMLAudioElement | null) => {
+      stopAudioLoop();
+      jawTargetsRef.current = null;
+      if (!el || typeof window === "undefined") {
+        pendingAudioElRef.current = null;
+        return;
+      }
+      const head = headRef.current;
+      if (!head) {
+        if (process.env.NODE_ENV === "development") {
+          console.log("[PROD-LIPSYNC] Avatar still loading, buffering audio element for attachment");
+        }
+        pendingAudioElRef.current = el;
+        return;
+      }
+      pendingAudioElRef.current = null;
+      try {
+        const AC = window.AudioContext || (window as any).webkitAudioContext;
+        if (!AC) return;
+        if (!audioCtxRef.current || audioCtxRef.current.state === "closed") {
+          audioCtxRef.current = new AC();
+        }
+        const ctx = audioCtxRef.current;
+        if (ctx.state === "suspended") {
+          void ctx.resume().catch(() => undefined);
+        }
+        let source = audioSourcesRef.current.get(el);
+        if (!source) {
+          source = ctx.createMediaElementSource(el);
+          audioSourcesRef.current.set(el, source);
+        }
+        const analyser = ctx.createAnalyser();
+        analyser.fftSize = ANALYSER_FFT_SIZE;
+        analyser.smoothingTimeConstant = 0;
+        source.connect(analyser);
+        analyser.connect(ctx.destination);
+        analyserRef.current = analyser;
+        audioElRef.current = el;
+        if (process.env.NODE_ENV === "development") {
+          console.log("[PROD-LIPSYNC] Attached audio element to Web Audio analyser");
+        }
+        const data = new Uint8Array(new ArrayBuffer(analyser.fftSize));
+        const tick = () => {
+          const current = audioElRef.current;
+          const an = analyserRef.current;
+          if (!current || !an) return;
+          let target = 0;
+          if (!current.paused && !current.ended) {
+            try {
+              an.getByteTimeDomainData(data as Uint8Array<ArrayBuffer>);
+              target = rmsFromTimeDomain(data);
+            } catch {
+              target = 0;
+            }
+          }
+          audioLevelRef.current = smoothLevel(audioLevelRef.current, target);
+          try {
+            writeJaw(jawOpenForLevel(audioLevelRef.current));
+          } catch { /* noop */ }
+          audioRafRef.current = requestAnimationFrame(tick);
+        };
+        audioRafRef.current = requestAnimationFrame(tick);
+      } catch (err) {
+        if (process.env.NODE_ENV === "development") {
+          console.warn("[PROD-LIPSYNC] Audio analysis fallback:", err);
+        }
+        stopAudioLoop();
+      }
+    };
+
+    const detachAudio = () => {
+      stopAudioLoop();
+    };
+
     useEffect(() => {
       let cancelled = false;
       let head: any = null;
       const container = containerRef.current;
       if (!container || typeof window === "undefined") return;
 
-      // TalkingHead's stop() never removes its renderer canvas from the DOM
-      // (it only halts the loop and suspends the AudioContext). In dev,
-      // StrictMode/HMR remounts this effect on the SAME container div, which
-      // would stack a second canvas + frozen duplicate model behind the live
-      // one. Purge any stale canvases so there is EXACTLY ONE renderer/model.
       container.querySelectorAll("canvas").forEach((c) => c.remove());
 
       void (async () => {
@@ -428,7 +703,7 @@ export const LiveSakhiAvatar = forwardRef<LiveSakhiAvatarHandle, LiveSakhiAvatar
             lipsyncModules: [],
             avatarIdleEyeContact: reducedMotion ? 0.15 : 0.35,
             avatarIdleHeadMove: reducedMotion ? 0.15 : 0.4,
-            avatarSpeakingEyeContact: 0.6,
+            avatarSpeakingEyeContact: reducedMotion ? 0.3 : 0.6,
             modelPixelRatio: dpr,
             modelFPS: 30,
             cameraRotateEnable: false,
@@ -444,7 +719,7 @@ export const LiveSakhiAvatar = forwardRef<LiveSakhiAvatarHandle, LiveSakhiAvatar
           buildMoods(head);
 
           await head.showAvatar(
-            { url: SAKHI_GLB, body: "F", lipsyncLang: "en", avatarMood: "neutral" },
+            { url: modelUrl, body: "F", lipsyncLang: "en", avatarMood: "neutral" },
             () => {}
           );
 
@@ -470,19 +745,24 @@ export const LiveSakhiAvatar = forwardRef<LiveSakhiAvatarHandle, LiveSakhiAvatar
           headRef.current = head;
           if (cancelled) return;
 
-          // The page may call speakStart while the model is still loading and
-          // headRef is still null (auto-run intro fires at ~600ms). Buffer the
-          // sentence/expression and flush them the moment the avatar is ready,
-          // otherwise the mouth stays silent for that entire run.
-          const pendingSentence = pendingSentenceRef.current;
-          pendingSentenceRef.current = null;
-          if (pendingSentence) {
+          if (onRigReport) {
+            try {
+              const headMesh = head.armature.getObjectByName("Wolf3D_Head");
+              const dict = headMesh?.morphTargetDictionary;
+              onRigReport(summarizeRig(dict));
+            } catch { /* noop */ }
+          }
+
+          // Buffer flush for speech
+          const pending = pendingSpeechRef.current;
+          pendingSpeechRef.current = null;
+          if (pending?.sentence) {
             try {
               head.stopSpeaking();
-              pushG2pVisemes(head, pendingSentence);
+              pushG2pVisemes(head, pending.sentence, pending.wordTimings);
               lastPushRef.current = {
                 at: Date.now(),
-                sentence: pendingSentence.slice(0, 60),
+                sentence: pending.sentence.slice(0, 60),
                 flushed: true,
                 animClock: Math.round(head.animClock),
                 pushed: head.animQueue.filter(
@@ -504,12 +784,22 @@ export const LiveSakhiAvatar = forwardRef<LiveSakhiAvatarHandle, LiveSakhiAvatar
             }
           }
 
+          // Buffer flush for audio element
+          const pendingAudio = pendingAudioElRef.current;
+          pendingAudioElRef.current = null;
+          if (pendingAudio && !pendingAudio.paused && !pendingAudio.ended) {
+            attachAudioElement(pendingAudio);
+          }
+
           installSakhiDebug({
             getHead: () => headRef.current,
             getStatus: () => statusNowRef.current,
             getLastPush: () => lastPushRef.current,
           });
           report("ready");
+          if (process.env.NODE_ENV === "development") {
+            console.log("[PROD-LIPSYNC] LiveSakhiAvatar mounted and ready:", modelUrl);
+          }
         } catch (err) {
           console.error("[LiveSakhiAvatar] init failed", err);
           if (cancelled) return;
@@ -524,11 +814,12 @@ export const LiveSakhiAvatar = forwardRef<LiveSakhiAvatarHandle, LiveSakhiAvatar
 
       return () => {
         cancelled = true;
+        try {
+          detachAudio();
+        } catch { /* noop */ }
         headRef.current = null;
         try {
           head?.stop();
-          // TalkingHead's stop() leaves renderer.domElement in the DOM — remove
-          // and dispose it so an unmount/remount can never stack two canvases.
           head?.renderer?.domElement?.remove();
           head?.renderer?.dispose?.();
           head?.resizeobserver?.disconnect?.();
@@ -537,24 +828,27 @@ export const LiveSakhiAvatar = forwardRef<LiveSakhiAvatarHandle, LiveSakhiAvatar
         }
       };
       // eslint-disable-next-line react-hooks/exhaustive-deps
-    }, []);
+    }, [modelUrl]);
 
     useImperativeHandle(
       ref,
       (): LiveSakhiAvatarHandle => ({
-        speakStart(sentence) {
+        speakStart(sentence, wordTimings) {
           if (!sentence) return;
           const head = headRef.current;
           if (!head) {
             // Avatar still loading — remember it and flush once ready.
-            pendingSentenceRef.current = sentence;
+            if (process.env.NODE_ENV === "development") {
+              console.log("[PROD-LIPSYNC] speakStart queued while loading:", sentence.slice(0, 40));
+            }
+            pendingSpeechRef.current = { sentence, wordTimings };
             return;
           }
-          pendingSentenceRef.current = null;
+          pendingSpeechRef.current = null;
           let pushed = false;
           try {
             head.stopSpeaking();
-            pushed = pushG2pVisemes(head, sentence);
+            pushed = pushG2pVisemes(head, sentence, wordTimings);
           } catch {
             /* never let lip-sync take Chat/Voice down */
           }
@@ -566,7 +860,11 @@ export const LiveSakhiAvatar = forwardRef<LiveSakhiAvatarHandle, LiveSakhiAvatar
             queuedVisemes: head.animQueue.filter(
               (x: any) => x.template?.name === "viseme"
             ).length,
+            hasWordTimings: Boolean(wordTimings && wordTimings.length > 0),
           };
+          if (process.env.NODE_ENV === "development") {
+            console.log("[PROD-LIPSYNC] Speech started, visemes active:", lastPushRef.current.queuedVisemes);
+          }
           try {
             head.lookAtCamera(500);
           } catch {
@@ -580,11 +878,19 @@ export const LiveSakhiAvatar = forwardRef<LiveSakhiAvatarHandle, LiveSakhiAvatar
           }
         },
         speakEnd() {
-          pendingSentenceRef.current = null;
+          pendingSpeechRef.current = null;
+          pendingAudioElRef.current = null;
+          try {
+            detachAudio();
+          } catch { /* noop */ }
           const head = headRef.current;
           if (!head) return;
           try {
             head.stopSpeaking();
+            writeJaw(0);
+            if (process.env.NODE_ENV === "development") {
+              console.log("[PROD-LIPSYNC] Speech ended, mouth reset to neutral");
+            }
           } catch {
             /* noop */
           }
@@ -608,6 +914,16 @@ export const LiveSakhiAvatar = forwardRef<LiveSakhiAvatarHandle, LiveSakhiAvatar
           } catch {
             /* noop */
           }
+        },
+        attachAudioElement(element) {
+          try {
+            attachAudioElement(element);
+          } catch { /* noop */ }
+        },
+        detachAudio() {
+          try {
+            detachAudio();
+          } catch { /* noop */ }
         },
       }),
       []

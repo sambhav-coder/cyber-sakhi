@@ -32,11 +32,11 @@ import {
   resolveFemaleVoice,
 } from "@/lib/voice/speech";
 import type { SttSession, SpeakHandle } from "@/lib/voice/speech";
-import { detectLanguage } from "@/lib/sakhiAI";
+import { detectLanguage, explicitLanguageRequest, normalizeLanguage } from "@/lib/sakhiAI";
+import { getEntryLanguage } from "@/lib/entryLanguage";
+import { LanguageToggle, adaptSwitchToDetected, type SmartLangMode } from "@/components/companion/LanguageToggle";
 import type { SakhiLanguage } from "@/lib/sakhiAI";
-import { startLocalSttRecording } from "@/lib/voice/localStt";
-import type { LocalSttSession } from "@/lib/voice/localStt";
-import { SAKHI_VOICE_INTRO } from "@/lib/voice/content";
+import { getSakhiIntro } from "@/lib/voice/content";
 
 const LiveSakhiAvatar = dynamic(
   () =>
@@ -50,6 +50,7 @@ export interface VoiceSegment {
   id: string;
   speaker: "user" | "sakhi";
   text: string;
+  sources?: string[];
 }
 
 type Phase = "welcome" | "active";
@@ -58,13 +59,11 @@ type VoiceState = "idle" | "listening" | "thinking" | "speaking" | "error";
 const AUTOPLAY_BLOCK_DETECT_MS = 2600;
 
 /**
-  * Voice Mode welcome = the SAME approved English introduction.
-  * (single source of truth: SAKHI_VOICE_INTRO). It is spoken BEFORE the user
-  * has ever spoken, so per product policy it is ALWAYS English — identical
-  * wording, voice and quality in both surfaces. The moment the user speaks,
-  * language is re-detected per CURRENT TURN (no session lock).
-  */
-const WELCOME_TEXT = SAKHI_VOICE_INTRO;
+ * Voice Mode welcome — resolved from the single source of truth at speak
+ * time so the smart EN/हिं switch controls the NEXT welcome (text + TTS
+ * voice). The SAME string is rendered, spoken, and lip-synced.
+ */
+const voiceWelcomeFor = (mode: SmartLangMode): string => getSakhiIntro("voice", mode);
 
 interface VoiceAttachment {
   kind: "document" | "evidence" | "report" | "image";
@@ -118,18 +117,76 @@ export function VoiceModePortal({
   const [lockerOpen, setLockerOpen] = useState(false);
   const [lockerLoading, setLockerLoading] = useState(false);
   const [lockerItems, setLockerItems] = useState<LockerItem[]>([]);
-  const [language, setLanguage] = useState<SakhiLanguage>(initialLanguage);
+  // Entry-gate inheritance: an explicit prop wins, otherwise the stored
+  // pre-intro choice becomes the default, otherwise English. The smart
+  // switch + per-turn detection still apply from the first utterance.
+  const [language, setLanguage] = useState<SakhiLanguage>(() => {
+    if (initialLanguage === "hi") return "hi";
+    return getEntryLanguage() ?? initialLanguage;
+  });
+  // ONE smart language switch (EN/हिं). Voice transcripts confidently in the
+  // other language move the switch itself (smart adaptation); Hinglish is a
+  // per-turn one-shot override with no third UI option.
+  const [langMode, setLangMode] = useState<SmartLangMode>(() => {
+    if (initialLanguage === "hi") return "hi";
+    return getEntryLanguage() ?? "en";
+  });
   const [providerLabel, setProviderLabel] = useState<string | null>(null);
 
   const sttRef = useRef<SttSession | null>(null);
-  const localSttRef = useRef<LocalSttSession | null>(null);
   const speakRef = useRef<SpeakHandle | null>(null);
-  const avatarRef = useRef<LiveSakhiAvatarHandle | null>(null);
+  const welcomeAvatarRef = useRef<LiveSakhiAvatarHandle | null>(null);
+  const activeDesktopAvatarRef = useRef<LiveSakhiAvatarHandle | null>(null);
+  const activeMobileAvatarRef = useRef<LiveSakhiAvatarHandle | null>(null);
+
+  const forEachAvatar = (fn: (handle: LiveSakhiAvatarHandle) => void) => {
+    if (welcomeAvatarRef.current) fn(welcomeAvatarRef.current);
+    if (activeDesktopAvatarRef.current) fn(activeDesktopAvatarRef.current);
+    if (activeMobileAvatarRef.current) fn(activeMobileAvatarRef.current);
+  };
+
+  const avatarRef = useRef<LiveSakhiAvatarHandle>({
+    speakStart: (sentence, wordTimings) => {
+      if (process.env.NODE_ENV === "development") {
+        const count =
+          (welcomeAvatarRef.current ? 1 : 0) +
+          (activeDesktopAvatarRef.current ? 1 : 0) +
+          (activeMobileAvatarRef.current ? 1 : 0);
+        console.log(`[PROD-LIPSYNC][VoiceMode] speakStart dispatched to ${count} mounted avatar slot(s)`);
+      }
+      forEachAvatar((h) => h.speakStart(sentence, wordTimings));
+    },
+    speakEnd: () => {
+      forEachAvatar((h) => h.speakEnd());
+    },
+    setExpression: (exp) => {
+      forEachAvatar((h) => h.setExpression(exp));
+    },
+    attachAudioElement: (el) => {
+      if (process.env.NODE_ENV === "development") {
+        const count =
+          (welcomeAvatarRef.current ? 1 : 0) +
+          (activeDesktopAvatarRef.current ? 1 : 0) +
+          (activeMobileAvatarRef.current ? 1 : 0);
+        console.log(`[PROD-LIPSYNC][VoiceMode] attachAudioElement dispatched to ${count} mounted avatar slot(s)`);
+      }
+      forEachAvatar((h) => h.attachAudioElement(el));
+    },
+    detachAudio: () => {
+      forEachAvatar((h) => h.detachAudio());
+    },
+  });
   const voiceRef = useRef<SpeechSynthesisVoice | null>(null);
   // Per-turn language: the CURRENT user turn decides Sakhi's reply AND the TTS
   // voice/script. A previous Hindi turn must never lock the next English turn.
-  const languageRef = useRef<SakhiLanguage>(initialLanguage);
+  // Resolved once to match the state initializers above (prop > entry gate > en).
+  const resolvedInitial: SakhiLanguage =
+    initialLanguage === "hi" ? "hi" : (getEntryLanguage() ?? initialLanguage);
+  const resolvedMode: SmartLangMode = resolvedInitial === "hi" ? "hi" : "en";
+  const languageRef = useRef<SakhiLanguage>(resolvedInitial);
   languageRef.current = language; // keep ref in sync with React state
+  const langModeRef = useRef<SmartLangMode>(resolvedMode);
+  langModeRef.current = langMode;
   const lastFinalRef = useRef("");
   const lastInterimRef = useRef("");
   const failedUtteranceRef = useRef<string | null>(null);
@@ -148,8 +205,6 @@ export function VoiceModePortal({
   };
 
   const stopListening = () => {
-    localSttRef.current?.abort();
-    localSttRef.current = null;
     sttRef.current?.stop();
     sttRef.current = null;
   };
@@ -164,7 +219,7 @@ export function VoiceModePortal({
     const caps = getBrowserSpeechCapabilities();
     setCapacities(caps);
     setMicCapable(Boolean(navigator.mediaDevices?.getUserMedia));
-    resolveFemaleVoice("en").then((v) => {
+    resolveFemaleVoice(langModeRef.current).then((v) => {
       if (v) voiceRef.current = v;
     });
     const mq = window.matchMedia("(prefers-reduced-motion: reduce)");
@@ -218,16 +273,32 @@ export function VoiceModePortal({
     setVoiceState("speaking");
     setOrbState("speaking");
     setStatusText("Sakhi is introducing herself…");
-    const handle = speakWithEngine(WELCOME_TEXT, voiceRef.current, {
-      language: "en",
+    const welcomeText = voiceWelcomeFor(langModeRef.current);
+    let wordTimingsDelivered = false;
+    const handle = speakWithEngine(welcomeText, voiceRef.current, {
+      language: langModeRef.current,
       rate: 0.97,
       pitch: 1.03,
+      onAudioElement: (el) => avatarRef.current?.attachAudioElement(el),
+      onWords: (words) => {
+        if (words.length > 0) {
+          if (process.env.NODE_ENV === "development")
+            console.log("[PROD-LIPSYNC][Welcome] Word boundaries received:", words.length);
+          wordTimingsDelivered = true;
+          avatarRef.current?.speakStart(welcomeText, words);
+        }
+      },
       onStart: () => {
         welcomeStartedRef.current = true;
         setExpression("warm");
-        avatarRef.current?.speakStart(WELCOME_TEXT);
+        // Only call speakStart if onWords didn't already deliver exact timing.
+        if (!wordTimingsDelivered) {
+          if (process.env.NODE_ENV === "development")
+            console.log("[PROD-LIPSYNC][Welcome] Fallback: no word timings, using estimated");
+          avatarRef.current?.speakStart(welcomeText);
+        }
         const iv = window.setInterval(() => {
-          setWelcomeReveal((p) => Math.min(p + 3, WELCOME_TEXT.length));
+          setWelcomeReveal((p) => Math.min(p + 3, welcomeText.length));
         }, 32);
         welcomeTimersRef.current.push(iv);
       },
@@ -237,7 +308,7 @@ export function VoiceModePortal({
         setVoiceState("idle");
         setOrbState("idle");
         setWelcomeSpoken(true);
-        setWelcomeReveal(WELCOME_TEXT.length);
+        setWelcomeReveal(welcomeText.length);
         cancelWelcome();
         setStatusText("Tap the orb to talk, or start a new voice conversation.");
       },
@@ -247,7 +318,7 @@ export function VoiceModePortal({
         setVoiceState("idle");
         setOrbState("idle");
         setWelcomeSpoken(true);
-        setWelcomeReveal(WELCOME_TEXT.length);
+        setWelcomeReveal(welcomeText.length);
         cancelWelcome();
       },
     });
@@ -260,18 +331,19 @@ export function VoiceModePortal({
         setOrbState("idle");
         setStatusText("Autoplay was blocked — play Sakhi's welcome to hear her introduce Voice Mode.");
         cancelWelcome();
-        setWelcomeReveal(WELCOME_TEXT.length);
+        setWelcomeReveal(welcomeText.length);
       }
     }, AUTOPLAY_BLOCK_DETECT_MS);
     welcomeTimersRef.current.push(blockId);
   };
 
   const revealWelcome = () => {
+    const total = voiceWelcomeFor(langModeRef.current).length;
     let steps = 0;
     const iv = window.setInterval(() => {
       steps += 3;
       setWelcomeReveal(steps);
-      if (steps >= WELCOME_TEXT.length) {
+      if (steps >= total) {
         window.clearInterval(iv);
         setWelcomeSpoken(true);
         cancelWelcome();
@@ -302,7 +374,10 @@ export function VoiceModePortal({
     }
   };
 
-  const sendUtterance = async (text: string): Promise<string> => {
+  const sendUtterance = async (
+    text: string,
+    turnPin: SakhiLanguage
+  ): Promise<{ text: string; sources: string[] }> => {
     let conversationId = conversationIdRef.current;
     if (!conversationId) {
       conversationId = await createConversation("Voice conversation");
@@ -315,17 +390,20 @@ export function VoiceModePortal({
       body: JSON.stringify({
         message: text,
         language,
+        forceLanguage: turnPin,
         conversationId,
         attachments: sentAttachments,
       }),
     });
     const data = await res.json();
     if (!res.ok) throw new Error(data?.error || "Sakhi companion service error.");
-    if (data.detectedLanguage) {
-      // Server-authoritative language from THIS turn — TTS follows it.
-      setLanguage(data.detectedLanguage);
-      languageRef.current = data.detectedLanguage;
-      sttRef.current?.setLang?.(data.detectedLanguage);
+    if (typeof data.detectedLanguage === "string") {
+      // Server-authoritative language for THIS turn — TTS follows it, so an
+      // English transcript is never answered with a Hindi voice.
+      const turnLang = normalizeLanguage(data.detectedLanguage);
+      setLanguage(turnLang);
+      languageRef.current = turnLang;
+      sttRef.current?.setLang?.(turnLang);
     }
     if (data.provider?.label) setProviderLabel(data.provider.label);
     // Images were consumed by this utterance — release their object URLs and
@@ -336,7 +414,10 @@ export function VoiceModePortal({
       });
       setAttachments([]);
     }
-    return data?.text ?? "";
+    return {
+      text: data?.text ?? "",
+      sources: Array.isArray(data?.citedSources) ? data.citedSources : [],
+    };
   };
 
   // ── Speech: Sakhi talks; the avatar mouth follows the real audio ──
@@ -351,22 +432,37 @@ export function VoiceModePortal({
     setVoiceState("speaking");
     setOrbState("speaking");
     setStatusText("Sakhi is speaking…");
-    // Per-turn language: THIS turn decides the voice — English -> aru,
-    // Hindi/Hinglish -> priyamvada. Never a session lock.
+    // Per-turn language: THIS turn decides the server voice (Edge TTS —
+    // en: Neerja, hi/hinglish: Swara). Never a session lock.
     console.log("🧪 [Voice Mode] TTS REQUEST:", { 
       TTS_ENGINE: "edge-tts (via /api/voice/tts)",
       LANGUAGE: languageRef.current,
       TEXT_LENGTH: text.length,
       TEST_MODE: process.env.SAKHI_TEST_MODE === 'edge-tts-only' ? "edge-tts-only" : "normal"
     });
+    let wordTimingsDelivered = false;
     const handle = speakWithEngine(text, voiceRef.current, {
       language: languageRef.current,
       rate: 0.98,
       pitch: 1.04,
+      onAudioElement: (el) => avatarRef.current?.attachAudioElement(el),
+      onWords: (words) => {
+        if (words.length > 0) {
+          if (process.env.NODE_ENV === "development")
+            console.log("[PROD-LIPSYNC][VoiceMode] Word boundaries received:", words.length);
+          wordTimingsDelivered = true;
+          avatarRef.current?.speakStart(text, words);
+        }
+      },
       onStart: () => {
         console.log("🧪 [Voice Mode] TTS AUDIO STARTED");
         setExpression("warm");
-        avatarRef.current?.speakStart(text);
+        // Only call speakStart if onWords didn't already deliver exact timing.
+        if (!wordTimingsDelivered) {
+          if (process.env.NODE_ENV === "development")
+            console.log("[PROD-LIPSYNC][VoiceMode] Fallback: no word timings, using estimated");
+          avatarRef.current?.speakStart(text);
+        }
       },
       onEnd: () => {
         console.log("🧪 [Voice Mode] TTS AUDIO COMPLETED");
@@ -390,10 +486,14 @@ export function VoiceModePortal({
   };
 
   // ── STT pipeline: user → brain → reply → voice ──
-  const pushSegment = (speaker: VoiceSegment["speaker"], text: string) => {
+  const pushSegment = (
+    speaker: VoiceSegment["speaker"],
+    text: string,
+    sources?: string[]
+  ) => {
     setSegments((prev) => [
       ...prev,
-      { id: "vseg_" + Date.now() + "_" + prev.length, speaker, text },
+      { id: "vseg_" + Date.now() + "_" + prev.length, speaker, text, sources },
     ]);
   };
 
@@ -405,15 +505,25 @@ export function VoiceModePortal({
       setStatusText("Tap the orb to talk.");
       return;
     }
-    // CRITICAL: Per-turn language detection from ACTUAL transcript
-    // THIS message decides the reply + TTS language. A prior Hindi turn
-    // cannot force a following English "Hi" into Hindi.
-    const turnLang = detectLanguage(trimmed);
-    setLanguage(turnLang);
-    languageRef.current = turnLang;
+    // Smart voice language: THIS transcript decides the reply + TTS language.
+    // An explicit request ("in Hindi") wins; a confident en/hi transcript
+    // moves the single switch so English speech gets an English reply even
+    // when Hindi mode was selected (and vice versa); Hinglish is a one-shot
+    // override with no third UI option. Technical terms are never translated.
+    const detected = explicitLanguageRequest(trimmed) ?? detectLanguage(trimmed);
+    const nextMode = adaptSwitchToDetected(langModeRef.current, detected);
+    if (nextMode !== langModeRef.current) {
+      setLangMode(nextMode);
+      langModeRef.current = nextMode;
+      setLanguage(nextMode);
+      languageRef.current = nextMode;
+    }
+    const turnPin: SakhiLanguage = detected === "hinglish" ? "hinglish" : nextMode;
+    setLanguage(turnPin);
+    languageRef.current = turnPin;
     // Update STT language for NEXT turn based on current turn's detected language
     // This improves recognition accuracy for subsequent turns
-    sttRef.current?.setLang?.(turnLang);
+    sttRef.current?.setLang?.(turnPin);
     setInterim("");
     pushSegment("user", trimmed);
     failedUtteranceRef.current = null;
@@ -421,11 +531,11 @@ export function VoiceModePortal({
     setVoiceState("thinking");
     setOrbState("thinking");
     setStatusText("Sakhi is thinking…");
-    void sendUtterance(trimmed)
+    void sendUtterance(trimmed, turnPin)
       .then((reply) => {
-        if (reply) {
-          pushSegment("sakhi", reply);
-          speakReply(reply);
+        if (reply.text) {
+          pushSegment("sakhi", reply.text, reply.sources);
+          speakReply(reply.text);
         } else {
           failedUtteranceRef.current = trimmed;
           setError("I couldn't reach the Sakhi service for that message. Please try again.");
@@ -445,14 +555,9 @@ export function VoiceModePortal({
 
   const toggleMic = () => {
     if (voiceState === "listening") {
-      // Tap again = commit: the on-device session sends what it heard
-      // (exactly one final utterance); the browser path just ends.
-      if (localSttRef.current) {
-        localSttRef.current.stop();
-        localSttRef.current = null;
-      } else {
-        stopListening();
-      }
+      // Tap again = commit: the on-device browser session sends what it
+      // heard (exactly one final utterance).
+      stopListening();
       return;
     }
     startListening();
@@ -469,71 +574,12 @@ export function VoiceModePortal({
     setOrbState("listening");
     setStatusText("Listening… I'll take it when you pause.");
 
-    // Production/Vercel: use the browser SpeechRecognition path directly.
-    // Local development: keep the existing Vosk/Piper path for offline testing.
-    if (process.env.NODE_ENV === "production") {
-      startBrowserStt();
-    } else {
-      startLocalMic();
-    }
+    // Node-only voice policy: on-device browser SpeechRecognition is the STT
+    // engine (no local Python/Vosk/Piper sidecar, no server round-trip).
+    startBrowserStt();
   };
 
-  /** Development-only mic: local Vosk/Piper speech engine.
-   *  Production uses the browser SpeechRecognition path above. */
-  const startLocalMic = () => {
-    // CRITICAL: Use auto mode for STT to let the sidecar detect language from audio
-    // The sidecar runs both Hindi and English models and intelligently selects
-    // the best result based on Unicode character detection and Hinglish markers
-    console.log("🧪 [Voice Mode] STT ENGINE: local-vosk (development-only, offline)");
-    localSttRef.current = startLocalSttRecording("auto", {
-      onLevel: () => {},
-      onInterim: (text) => {
-        lastInterimRef.current = text;
-        setInterim(text);
-      },
-      onFinal: (finalText) => {
-        console.log("🧪 [Voice Mode] STT RESULT:", { 
-          STT_ENGINE: "local-vosk", 
-          transcript: finalText,
-          length: finalText.length 
-        });
-        localSttRef.current = null;
-        if (voiceStateRef.current === "listening") handleUtterance(finalText);
-      },
-      onError: (code, message) => {
-        console.log("🧪 [Voice Mode] STT ERROR:", { 
-          STT_ENGINE: "local-vosk", 
-          code, 
-          message 
-        });
-        localSttRef.current = null;
-        if (code === "no_speech") {
-          setVoiceState("idle");
-          setOrbState("idle");
-          setStatusText("Mic stopped. Tap the orb to talk.");
-        } else if (code === "mic_denied" || code === "mic_not_available") {
-          setError(message);
-          setVoiceState("error");
-          setOrbState("error");
-          setStatusText("Microphone access was denied — allow the mic and tap the orb again.");
-        } else if (capacities.stt) {
-          // On-device engine unavailable → browser web-speech fallback.
-          console.log("🧪 [Voice Mode] FALLING BACK TO: browser-speech-recognition");
-          setStatusText("Switching recognition…");
-          startBrowserStt();
-        } else {
-          setError(message);
-          setVoiceState("error");
-          setOrbState("error");
-          setStatusText("Voice input stopped — you can type instead.");
-          setTypingBox(true);
-        }
-      },
-      onEnd: () => {},
-    });
-  };
-
-  /** Production mic: the browser's native Web Speech API. */
+  /** The browser's native Web Speech API. */
   const startBrowserStt = () => {
     if (!capacities.stt) {
       setVoiceState("error");
@@ -637,12 +683,12 @@ export function VoiceModePortal({
     void createConversation("Voice conversation").then((id) => {
       conversationIdRef.current = id;
     });
-    pushSegment("sakhi", WELCOME_TEXT);
+    pushSegment("sakhi", voiceWelcomeFor(langModeRef.current));
     setTimeout(() => {
       setPhase("active");
       setWelcomeSpoken(true);
       if (!mutedRef.current) {
-        speakReply(WELCOME_TEXT);
+        speakReply(voiceWelcomeFor(langModeRef.current));
       } else {
         setVoiceState("idle");
         setOrbState("idle");
@@ -720,7 +766,7 @@ export function VoiceModePortal({
       if (!res.ok) throw new Error(data?.error || "Upload failed.");
       const extract = data.file;
       if (extract.content && extract.content.trim()) {
-        await sendUtterance("Please review this document for safety signals.");
+        await sendUtterance("Please review this document for safety signals.", langModeRef.current);
         setAttachments((prev) => [
           ...prev,
           { kind: "document", name: extract.name, content: extract.content, note: extract.note ?? undefined },
@@ -773,7 +819,7 @@ export function VoiceModePortal({
 
   const micActive =
     voiceState === "listening" &&
-    (Boolean(sttRef.current) || Boolean(localSttRef.current));
+    Boolean(sttRef.current);
 
   // ════════════════════════════════════════════════════════════════
   // RENDER
@@ -811,6 +857,7 @@ export function VoiceModePortal({
         </div>
 
         <div className="flex items-center gap-2 shrink-0">
+          <LanguageToggle compact value={langMode} onChange={(v) => { setLangMode(v); langModeRef.current = v; setLanguage(v); languageRef.current = v; sttRef.current?.setLang?.(v); }} />
           <span className="hidden sm:inline-flex items-center gap-1.5 text-[10px] px-2.5 py-1 rounded-full bg-emerald-950/40 border border-emerald-700/40 text-emerald-300 font-bold">
             {voiceState === "listening" ? "Mic Live" : voiceState === "speaking" ? "Sakhi Speaking" : voiceState === "thinking" ? "Thinking…" : voiceState === "error" ? "Needs Attention" : "Online"}
           </span>
@@ -877,7 +924,7 @@ export function VoiceModePortal({
                 />
                 <div className="absolute inset-0 rounded-[26px] overflow-hidden border border-emergency-900/50 bg-emergency-950/15 shadow-[0_30px_80px_-30px_rgba(127,29,29,0.7)]">
                   <LiveSakhiAvatar
-                    ref={avatarRef}
+                    ref={welcomeAvatarRef}
                     isSpeaking={voiceState === "speaking"}
                     reducedMotion={reducedMotion}
                     className="w-full h-full"
@@ -908,8 +955,8 @@ export function VoiceModePortal({
                       {voiceState === "speaking" ? "Sakhi is speaking her welcome" : welcomeSpoken ? "Sakhi's welcome has finished" : ""}
                     </span>
                     <p className="text-[13px] leading-[1.7] text-slate-100 font-medium min-h-[56px]">
-                      {WELCOME_TEXT.slice(0, welcomeReveal)}
-                      {voiceState === "speaking" && welcomeReveal < WELCOME_TEXT.length && (
+                      {voiceWelcomeFor(langMode).slice(0, welcomeReveal)}
+                      {voiceState === "speaking" && welcomeReveal < voiceWelcomeFor(langMode).length && (
                         <span aria-hidden className="inline-block w-[2px] h-[1em] align-text-bottom ml-0.5 bg-emergency-400 sakhi-caret" />
                       )}
                     </p>
@@ -948,10 +995,9 @@ export function VoiceModePortal({
                 </h1>
                 <p className="text-[13px] sm:text-sm text-slate-400 leading-relaxed max-w-lg">
                   Talk to Sakhi naturally — English, Hindi or Hinglish. She listens
-                  with her private on-device speech engine (your words never leave
-                  this machine), understands with the same Sakhi brain, and
-                  answers aloud in her own voice. No recordings are kept; your mic
-                  is used only while you talk.
+                  with your browser&apos;s speech recognition (on-device, nothing is
+                  stored), understands with the same Sakhi brain, and answers aloud
+                  in her own voice. Your mic is used only while you talk.
                 </p>
               </div>
 
@@ -1007,7 +1053,7 @@ export function VoiceModePortal({
                 />
                 <div className="absolute inset-0 rounded-3xl overflow-hidden border border-emergency-900/50 bg-emergency-950/20 shadow-[0_26px_70px_-30px_rgba(127,29,29,0.7)]">
                   <LiveSakhiAvatar
-                    ref={avatarRef}
+                    ref={activeDesktopAvatarRef}
                     isSpeaking={voiceState === "speaking"}
                     reducedMotion={reducedMotion}
                     className="w-full h-full"
@@ -1043,12 +1089,12 @@ export function VoiceModePortal({
                 {/* Mobile avatar chip */}
                 <div className="lg:hidden flex items-center justify-center gap-2 pb-1 border-b border-slate-800/60 sticky top-0 -mx-3 px-3 bg-slate-950/95 backdrop-blur-sm">
                   <span className="relative w-14 h-14 rounded-xl overflow-hidden border border-emergency-900/50 shrink-0">
-                    <LiveSakhiAvatar
-                      ref={avatarRef}
-                      isSpeaking={voiceState === "speaking"}
-                      reducedMotion={reducedMotion}
-                      className="w-full h-full"
-                    />
+                  <LiveSakhiAvatar
+                    ref={activeMobileAvatarRef}
+                    isSpeaking={voiceState === "speaking"}
+                    reducedMotion={reducedMotion}
+                    className="w-full h-full"
+                  />
                   </span>
                   <span
                     className="text-[11px] text-slate-300/90 font-semibold"
@@ -1075,6 +1121,20 @@ export function VoiceModePortal({
                       }`}
                     >
                       <p className="whitespace-pre-line">{seg.text}</p>
+                      {seg.speaker === "sakhi" &&
+                        seg.sources &&
+                        seg.sources.length > 0 && (
+                          <span className="flex flex-wrap gap-1.5 mt-2">
+                            {seg.sources.map((src, i) => (
+                              <span
+                                key={i}
+                                className="px-1.5 py-0.5 rounded bg-slate-800 text-slate-400 border border-slate-700/60 text-[9px] font-semibold"
+                              >
+                                {src}
+                              </span>
+                            ))}
+                          </span>
+                        )}
                       <span className={`block text-right text-[9px] mt-1.5 ${seg.speaker === "user" ? "text-emergency-200/50" : "text-slate-500"}`}>
                         {nowLabel()}
                       </span>

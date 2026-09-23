@@ -17,6 +17,8 @@ import {
 } from "@/lib/gov/govAudit";
 import { persistGovAuditEvent } from "@/lib/gov/govAuditPersistence";
 import type { GovOfficerContext } from "@/lib/gov/govTypes";
+import { completeGovSessionTotp, revokeGovSession } from "@/lib/gov/govSession";
+import { verifyGovOfficerTotp } from "@/lib/gov/govTotp";
 
 export const runtime = "nodejs";
 
@@ -64,9 +66,10 @@ export async function POST(req: Request): Promise<NextResponse> {
     return govJsonError(400, "BAD_REQUEST", "Invalid request body.");
   }
 
-  const { email, password } = (body ?? {}) as {
+  const { email, password, mfaCode } = (body ?? {}) as {
     email?: unknown;
     password?: unknown;
+    mfaCode?: unknown;
   };
   if (typeof email !== "string" || typeof password !== "string") {
     return govJsonError(400, "BAD_REQUEST", "Email and password are required.");
@@ -110,6 +113,21 @@ export async function POST(req: Request): Promise<NextResponse> {
       return govJsonError(500, "AUDIT_UNAVAILABLE", "Unable to complete request.");
     }
     return govJsonError(401, "INVALID_CREDENTIALS", GOV_LOGIN_FAILED_MESSAGE);
+  }
+
+  // A password-only session is never returned to the browser. The temporary
+  // server-side session is revoked on any failed TOTP check.
+  const otp = typeof mfaCode === "string" ? mfaCode.trim() : "";
+  const mfaValid = await verifyGovOfficerTotp(result.officer.officerId, otp);
+  if (!mfaValid) {
+    await revokeGovSession(result.session.id, result.officer.officerId, "mfa_failed").catch(() => {});
+    const event = buildGovAuditEvent({ action: "auth.login_failed", actor: unknownActor, result: "deny", denialReason: "mfa_failed", correlationId, remoteIp: meta.ip, userAgent: meta.userAgent });
+    if (event) await persistGovAuditEvent(event, { swallow: true });
+    return govJsonError(401, "INVALID_CREDENTIALS", GOV_LOGIN_FAILED_MESSAGE);
+  }
+  try { await completeGovSessionTotp(result.session.id); } catch {
+    await revokeGovSession(result.session.id, result.officer.officerId, "mfa_completion_failed").catch(() => {});
+    return govJsonError(500, "MFA_UNAVAILABLE", "Unable to complete sign-in.");
   }
 
   const actor: GovAuditActor = {

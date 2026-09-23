@@ -25,7 +25,7 @@ import {
   speakWithEngine,
 } from "@/lib/voice/speech";
 import type { SpeakHandle } from "@/lib/voice/speech";
-import { SAKHI_LANDING_INTRO } from "@/lib/voice/content";
+import { getSakhiIntro, type SakhiIntroLang } from "@/lib/voice/content";
 
 // Live 3D Sakhi avatar — TalkingHead (WebGL) + Three.js. Imported client-side
 // only so WebGL/browser APIs never execute during SSR.
@@ -37,9 +37,15 @@ const LiveSakhiAvatar = dynamic(
 
 const AUTOPLAY_BLOCK_DETECT_MS = 5000;
 
-const HUB_INTRO = SAKHI_LANDING_INTRO;
-
-export function SakhiHub() {
+export function SakhiHub({
+  language = "en",
+  modelUrl,
+}: {
+  language?: SakhiIntroLang;
+  modelUrl?: string;
+} = {}) {
+  // Landing intro from the unified intro API (same function as chat/voice).
+  const HUB_INTRO = getSakhiIntro("landing", language);
   const [isSpeaking, setIsSpeaking] = useState(false);
   const [introPhase, setIntroPhase] = useState<"idle" | "speaking" | "done">("idle");
   const [blocked, setBlocked] = useState(false);
@@ -63,7 +69,7 @@ export function SakhiHub() {
   useEffect(() => {
     const caps = getBrowserSpeechCapabilities();
     setSpeechSupported(caps.tts);
-    resolveFemaleVoice("en").then((v) => {
+    resolveFemaleVoice(language).then((v) => {
       voiceRef.current = v;
       setVoiceReady(true);
     });
@@ -125,18 +131,28 @@ export function SakhiHub() {
 
     setIntroPhase("speaking");
     setIsSpeaking(true);
-    // Landing introduction is ALWAYS English (product policy) — the local
-    // Piper English voice is used when available, else speechSynthesis.
-    console.log("🧪 [SakhiHub] TTS REQUEST:", { 
+    // Intro language follows the smart switch (prop); the Node Edge TTS voice
+    // via /api/voice/tts matches it (en: Neerja, hi: Swara), else browser voice.
+    console.log("🧪 [SakhiHub] TTS REQUEST:", {
       TTS_ENGINE: "edge-tts (via /api/voice/tts)",
-      LANGUAGE: "en",
+      LANGUAGE: language,
       TEXT_LENGTH: HUB_INTRO.length,
       TEST_MODE: process.env.SAKHI_TEST_MODE === 'edge-tts-only' ? "edge-tts-only" : "normal"
     });
+    let wordTimingsDelivered = false;
     const handle = speakWithEngine(HUB_INTRO, voiceRef.current, {
-      language: "en",
+      language,
       rate: 0.97,
       pitch: 1.03,
+      onAudioElement: (el) => avatarRef.current?.attachAudioElement(el),
+      onWords: (words) => {
+        if (words.length > 0) {
+          if (process.env.NODE_ENV === "development")
+            console.log("[PROD-LIPSYNC][SakhiHub] Word boundaries received:", words.length);
+          wordTimingsDelivered = true;
+          avatarRef.current?.speakStart(HUB_INTRO, words);
+        }
+      },
       onStart: () => {
         console.log("🧪 [SakhiHub] TTS AUDIO STARTED");
         speechStartedRef.current = true;
@@ -144,7 +160,12 @@ export function SakhiHub() {
         setIntroPhase("speaking");
         setIsSpeaking(true);
         setExpression("warm");
-        avatarRef.current?.speakStart(HUB_INTRO);
+        // Only call speakStart if onWords didn't already deliver exact timing.
+        if (!wordTimingsDelivered) {
+          if (process.env.NODE_ENV === "development")
+            console.log("[PROD-LIPSYNC][SakhiHub] Fallback: no word timings, using estimated");
+          avatarRef.current?.speakStart(HUB_INTRO);
+        }
         revealIntro(HUB_INTRO);
       },
       onEnd: () => {
@@ -265,6 +286,7 @@ export function SakhiHub() {
                   ref={avatarRef}
                   isSpeaking={isSpeaking}
                   reducedMotion={reducedMotion}
+                  modelUrl={modelUrl}
                   onStatus={setAvatarStatus}
                 />
               </div>

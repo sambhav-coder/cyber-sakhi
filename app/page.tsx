@@ -340,7 +340,7 @@ export default function HomePage() {
         >
           AI-Powered Digital Safety &amp; Emergency Response System
           <span className="block text-slate-400/80 mt-1.5 text-xs sm:text-sm">
-            Evidence integrity · Threat intelligence · 24/7 emergency dispatch — for women, by design.
+            Evidence integrity · Threat intelligence · Live Location capture — for women, by design.
           </span>
         </p>
 
@@ -725,7 +725,7 @@ export default function HomePage() {
               </div>
               <p className="text-xs text-slate-400 leading-relaxed max-w-sm">
                 Unified AI safety companion for women in India. On-device threat detection,
-                SHA-256 evidence integrity, VoiceShield emergency dispatch, and empathetic
+                SHA-256 evidence integrity, explicit Live Location capture, and empathetic
                 HerGuardian AI guidance — built trust-first, end-to-end.
               </p>
             </div>

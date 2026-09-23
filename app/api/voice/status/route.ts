@@ -2,11 +2,14 @@ import { NextResponse } from "next/server";
 import { getServerSession } from "next-auth";
 import { authOptions } from "@/lib/authOptions";
 import { getSttSlotStatus, getTtsSlotStatus } from "@/lib/voice/serverConfig";
-import { localSttAvailable, localTtsAvailable } from "@/lib/voice/localPiper";
 
 /**
  * GET /api/voice/status — authenticates and reports honest voice capability.
  * The client merges this with its own on-device browser probes.
+ *
+ * Node-only voice policy: no local Python/Piper/Vosk engine ships with the
+ * app. TTS is the Node Edge TTS server route; on-device browser
+ * SpeechRecognition handles STT. local.* is always false by design.
  */
 export async function GET() {
   try {
@@ -20,8 +23,9 @@ export async function GET() {
 
     return NextResponse.json({
       local: {
-        tts: localTtsAvailable(),
-        stt: localSttAvailable(),
+        tts: false,
+        stt: false,
+        note: "Local Python speech engines are disabled by policy. TTS uses the server Edge TTS route; STT uses on-device browser speech recognition.",
       },
       stt: {
         provider: stt.provider,

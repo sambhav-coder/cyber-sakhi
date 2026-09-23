@@ -69,7 +69,7 @@ const NAV_SECTIONS: NavSection[] = [
     label: "Intelligence",
     items: [
       { href: "/gov/indicators", icon: Radar, label: "Indicator Intelligence", permission: "indicator.view" },
-      { href: "/gov/geography", icon: MapPin, label: "Geographic Intelligence", permission: "geo.view" },
+      { href: "/gov/geography", icon: MapPin, label: "Map", permission: "geo.view" },
     ],
   },
   {

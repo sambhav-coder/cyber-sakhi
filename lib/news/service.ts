@@ -1,5 +1,10 @@
 import { createHash } from "node:crypto";
-import { DEFAULT_NEWS_FEEDS, createProvider, type NewsProvider } from "./providers";
+import {
+  DEFAULT_NEWS_FEEDS,
+  HINDI_NEWS_FEEDS,
+  createProvider,
+  type NewsProvider,
+} from "./providers";
 import { parseFeedXml, parsePublishedDate } from "./feedParser";
 import { classify, extractLocation, isPolicyNoise, isRelevant, buildSummary } from "./filters";
 import { collapseSpaces } from "./text";
@@ -8,6 +13,7 @@ import type {
   FetcherLike,
   NewsArticle,
   NewsEdition,
+  NewsLanguage,
   RawFeedItem,
 } from "./types";
 
@@ -21,8 +27,11 @@ export interface NewsServiceDeps {
 }
 
 export interface NewsService {
-  getEdition(opts?: { force?: boolean }): Promise<NewsEdition>;
+  getEdition(opts?: { force?: boolean; language?: NewsLanguage }): Promise<NewsEdition>;
 }
+
+/** Card summary budget (~4–5 rendered lines). Feed text only, never invented. */
+export const ARTICLE_SUMMARY_CHARS = 460;
 
 interface CacheEntry {
   articles: NewsArticle[];
@@ -109,9 +118,11 @@ async function readResponseBody(res: Response): Promise<string> {
 function toArticle(
   item: RawFeedItem,
   provider: NewsProvider,
+  feed: FeedConfig,
   retrievedAt: string
 ): NewsArticle | null {
   if (!item.title) return null;
+  if (!item.link) return null;
   const text = `${item.title} ${item.summary}`;
   if (!isRelevant(text)) return null;
   if (isPolicyNoise(text)) return null;
@@ -121,7 +132,7 @@ function toArticle(
   return {
     id: sha1(`${provider.id}:${item.title.toLowerCase()}:${item.link}`),
     title: collapseSpaces(item.title),
-    summary: buildSummary(item.summary),
+    summary: buildSummary(item.summary, ARTICLE_SUMMARY_CHARS),
     sourceName: provider.name,
     sourceKind: provider.kind,
     sourceUrl: item.link,
@@ -132,11 +143,18 @@ function toArticle(
     location: extractLocation(text),
     imageUrl: item.imageUrl,
     verifiedSource: provider.kind === "government",
+    language: feed.language ?? "en",
   };
 }
 
 export function createNewsService(deps?: NewsServiceDeps): NewsService {
-  const feeds = deps?.feeds ?? DEFAULT_NEWS_FEEDS;
+  // Explicit custom feeds (tests, NEWS_FEED_URLS operators) are used for both
+  // editions. The default set is English + Hindi; each language edition
+  // fetches ONLY its own feeds into its OWN cache entry — Hindi never serves
+  // English cache and vice versa.
+  const customFeeds = deps?.feeds;
+  const feedsEn = customFeeds ?? DEFAULT_NEWS_FEEDS;
+  const feedsHi = customFeeds ?? HINDI_NEWS_FEEDS;
   const fetcher: FetcherLike = deps?.fetcher ?? ((url, init) =>
     defaultFetcher({
       url,
@@ -147,15 +165,26 @@ export function createNewsService(deps?: NewsServiceDeps): NewsService {
   const ttlMs = deps?.ttlMs ?? 15 * 60 * 1000;
   const maxAgeDays = deps?.maxAgeDays ?? 30;
 
-  let cache: CacheEntry | null = null;
+  // Separate cache entries per language — the core NO-FAKE-SWITCH guarantee.
+  const cacheByLang: Record<NewsLanguage, CacheEntry | null> = {
+    en: null,
+    hi: null,
+  };
 
-  const providers: NewsProvider[] = feeds.map((feed) => createProvider(feed, fetcher));
+  const providersByLang: Record<NewsLanguage, { provider: NewsProvider; feed: FeedConfig }[]> = {
+    en: feedsEn.map((feed) => ({ provider: createProvider(feed, fetcher), feed })),
+    hi: feedsHi.map((feed) => ({ provider: createProvider(feed, fetcher), feed })),
+  };
 
-  async function collect(force: boolean): Promise<{ articles: NewsArticle[]; feedsOk: number; fresh: boolean }> {
+  async function collect(
+    language: NewsLanguage,
+    force: boolean
+  ): Promise<{ articles: NewsArticle[]; feedsOk: number; fresh: boolean }> {
     const fetchedAt = now();
     const retrievedAt = fetchedAt.toISOString();
+    const entries = providersByLang[language];
     const results = await Promise.allSettled(
-      providers.map((provider) =>
+      entries.map(({ provider }) =>
         provider
           .fetch({})
           .then((res) => (res.ok ? readResponseBody(res) : Promise.reject(new Error(`HTTP ${res.status}`))))
@@ -166,10 +195,16 @@ export function createNewsService(deps?: NewsServiceDeps): NewsService {
     for (let i = 0; i < results.length; i += 1) {
       const result = results[i];
       if (result.status === "rejected") continue;
+      // Strict language separation: an edition contains ONLY articles from
+      // feeds tagged with its language. A Hindi edition therefore can never
+      // show an English article (and vice versa) — no translation, no mixing.
+      // Untagged feeds default to English, so a NEWS_FEED_URLS override
+      // yields an honestly-empty (offline) Hindi edition, never EN-as-HI.
+      if ((entries[i].feed.language ?? "en") !== language) continue;
       feedsOk += 1;
       const items = parseFeedXml(result.value);
       for (const item of items) {
-        const article = toArticle(item, providers[i], retrievedAt);
+        const article = toArticle(item, entries[i].provider, entries[i].feed, retrievedAt);
         if (article) articles.push(article);
       }
     }
@@ -177,28 +212,33 @@ export function createNewsService(deps?: NewsServiceDeps): NewsService {
     const sorted = rankArticles(articles, maxAgeDays, now());
     const fresh = feedsOk > 0;
     if (fresh) {
-      cache = { articles: sorted, storedAt: fetchedAt.getTime() };
+      cacheByLang[language] = { articles: sorted, storedAt: fetchedAt.getTime() };
     }
     return { articles: sorted, feedsOk, fresh };
   }
 
-  async function resolve(force: boolean): Promise<{
+  async function resolve(
+    language: NewsLanguage,
+    force: boolean
+  ): Promise<{
     articles: NewsArticle[];
     storedAt: Date;
     feedsOk: number;
     status: NewsEdition["cacheStatus"];
     fallbackToCache: boolean;
   }> {
+    const cache = cacheByLang[language];
+    const feedCount = providersByLang[language].length;
     if (!force && cache && now().getTime() - cache.storedAt < ttlMs) {
       return {
         articles: cache.articles,
         storedAt: new Date(cache.storedAt),
-        feedsOk: feeds.length,
+        feedsOk: feedCount,
         status: "cached",
         fallbackToCache: false,
       };
     }
-    const collected = await collect(force);
+    const collected = await collect(language, force);
     if (collected.fresh) {
       return {
         articles: collected.articles,
@@ -229,7 +269,8 @@ export function createNewsService(deps?: NewsServiceDeps): NewsService {
   return {
     async getEdition(opts) {
       const force = !!opts?.force;
-      const resolved = await resolve(force);
+      const language: NewsLanguage = opts?.language === "hi" ? "hi" : "en";
+      const resolved = await resolve(language, force);
       const preparedAt = now();
       const [lead, ...rest] = resolved.articles;
       const stories = rest.slice(0, STORY_COUNT);
@@ -238,7 +279,8 @@ export function createNewsService(deps?: NewsServiceDeps): NewsService {
         preparedAt: preparedAt.toISOString(),
         fetchedAt: resolved.storedAt.toISOString(),
         cacheStatus: resolved.status,
-        feedsTotal: feeds.length,
+        language,
+        feedsTotal: providersByLang[language].length,
         feedsOk: resolved.feedsOk,
         articles: resolved.articles,
         lead: lead ?? null,

@@ -38,6 +38,8 @@ export const AUDIT_ACTIONS = new Set([
   "user.profile_updated",
   "user.password_changed",
   "user.sakhi_number_updated",
+  "location.shared",
+  "location.viewed",
 ]);
 
 /** Payload keys whose values are whole-value PII regardless of shape. */

@@ -41,7 +41,7 @@ export const Navbar: React.FC = () => {
   const allNavLinks = [
     { href: "/", label: "Home", icon: Shield },
     { href: "/detector", label: "Check Message", icon: Search },
-    { href: "/sos", label: "VoiceShield SOS", icon: Radio },
+    { href: "/sos", label: "Live Location", icon: Radio },
     { href: "/locker", label: "Evidence Locker", icon: Lock },
     { href: "/email-forensics", label: "Email Forensics", icon: Mail },
     { href: "/sakhi", label: "Sakhi AI", icon: MessageSquare },
@@ -196,13 +196,14 @@ export const Navbar: React.FC = () => {
                 </Link>
               ) : null}
 
-              {/* 1-Tap SOS Button */}
+              {/* Live Location button */}
               <button
                 onClick={() => setIsSosOpen(true)}
+                title="Live Location (one-time GPS capture)"
                 className="relative inline-flex items-center justify-center px-3.5 py-1.5 sm:px-4 sm:py-2 text-xs font-bold text-white transition-all bg-gradient-to-r from-red-600 via-rose-600 to-red-700 rounded-xl shadow-lg shadow-red-900/40 hover:from-red-500 hover:to-rose-600 focus:outline-none focus:ring-2 focus:ring-red-500 focus:ring-offset-2 focus:ring-offset-slate-900 glow-red animate-pulse"
               >
                 <AlertTriangle className="w-3.5 h-3.5 sm:w-4 sm:h-4 mr-1 sm:mr-1.5 text-white animate-bounce-subtle" />
-                <span>🚨 1-TAP SOS</span>
+                <span>📍 LIVE LOCATION</span>
               </button>
 
               {/* Mobile Menu Toggle */}

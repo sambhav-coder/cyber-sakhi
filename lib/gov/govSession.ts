@@ -256,6 +256,16 @@ export async function revokeGovSession(
   throwIfError(error, "Failed to revoke government session.");
 }
 
+/** Mark a password-authenticated session as TOTP-authenticated after verification. */
+export async function completeGovSessionTotp(sessionId: string): Promise<void> {
+  const { error } = await getSupabaseServer()
+    .from("gov_sessions")
+    .update({ mfa_level: "pwd+otp", mfa_verified_at: new Date().toISOString() })
+    .eq("id", sessionId)
+    .is("revoked_at", null);
+  throwIfError(error, "Failed to complete government MFA.");
+}
+
 /**
  * Revoke ALL sessions for an officer by bumping session_version (stale rows
  * fail validation) and stamping live rows revoked. MUST be called on role or

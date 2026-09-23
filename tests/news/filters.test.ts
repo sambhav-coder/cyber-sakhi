@@ -16,10 +16,18 @@ describe("isRelevant", () => {
     expect(isRelevant("investment fraud via fake trading app")).toBe(true);
   });
 
+  it("accepts original-Hindi cybercrime stories", () => {
+    expect(isRelevant("ऑनलाइन ठगी में युवक से लाखों की धोखाधड़ी, पुलिस ने मामला दर्ज किया")).toBe(true);
+    expect(isRelevant("डिजिटल अरेस्ट बताकर बुजुर्ग से ठगी")).toBe(true);
+    expect(isRelevant("फिशिंग लिंक से बैंक खाता खाली")).toBe(true);
+  });
+
   it("rejects unrelated news", () => {
     expect(isRelevant("PM greets nation on Diwali, asks citizens to stay safe")).toBe(false);
     expect(isRelevant("cricket team wins the series 3-2")).toBe(false);
     expect(isRelevant("monsoon rains across Kerala leave roads waterlogged")).toBe(false);
+    expect(isRelevant("मानसून की बारिश से दिल्ली में जलभराव")).toBe(false);
+    expect(isRelevant("क्रिकेट में भारत की जीत")).toBe(false);
   });
 });
 
@@ -91,6 +99,24 @@ describe("classify", () => {
     const c = classify("Operation Toofan to trace drug money through UPI, crypto wallets");
     expect(c?.category).toBe("Financial fraud");
   });
+
+  it("classifies original-Hindi stories into the same taxonomy", () => {
+    expect(classify("डिजिटल अरेस्ट बताकर बुजुर्ग से 1 करोड़ की ठगी")?.category).toBe("Digital arrest");
+    expect(classify("ब्लैकमेल कर युवती से पैसे ऐंठे, अश्लील वीडियो वायरल की धमकी")?.category).toBe(
+      "Sextortion & blackmail"
+    );
+    expect(classify("फिशिंग लिंक भेजकर बैंक खाता खाली, केवाईसी के नाम पर ठगी")?.category).toBe(
+      "Phishing & identity theft"
+    );
+    expect(classify("यूपीआई ओटीपी बताते ही खाते से पैसे गायब, पुलिस ने मामला दर्ज किया")?.category).toBe(
+      "Financial fraud"
+    );
+  });
+
+  it("returns null for non-cyber Hindi stories", () => {
+    expect(classify("मानसून की बारिश से दिल्ली में जलभराव")).toBeNull();
+    expect(classify("क्रिकेट में भारत की शानदार जीत")).toBeNull();
+  });
 });
 
 describe("extractLocation", () => {
@@ -98,6 +124,11 @@ describe("extractLocation", () => {
     expect(extractLocation("woman in Nagpur loses Rs 8 lakh in UPI fraud")).toBe("Nagpur");
     expect(extractLocation("Tamil Nadu cyber cell arrests accused")).toBe("Tamil Nadu");
     expect(extractLocation("Bengaluru resident files complaint")).toBe("Bengaluru");
+  });
+
+  it("finds Devanagari place names in Hindi articles", () => {
+    expect(extractLocation("मुंबई में ऑनलाइन ठगी का मामला")).toBe("मुंबई");
+    expect(extractLocation("उत्तर प्रदेश पुलिस ने साइबर ठगों को पकड़ा")).toBe("उत्तर प्रदेश");
   });
 
   it("returns null when no Indian place is mentioned", () => {

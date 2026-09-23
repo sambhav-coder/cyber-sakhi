@@ -18,7 +18,12 @@ import {
   deskCandidates,
   excludePoolFromSecondary,
   mergePool,
+  NEWS_AUTO_SCROLL_HOLD_MS,
+  NEWS_AUTO_SCROLL_INTERVAL_MS,
+  NEWS_AUTO_SCROLL_TICK_MS,
   nextLeadIndex,
+  shouldAutoAdvance,
+  tickProgress,
   watchArticles,
 } from "@/lib/news/rotation";
 import {
@@ -36,6 +41,7 @@ interface EditionPayload {
   preparedAt: string;
   fetchedAt: string;
   cacheStatus: "live" | "cached" | "offline";
+  language: "en" | "hi";
   feedsTotal: number;
   feedsOk: number;
   lead: NewsArticle | null;
@@ -44,11 +50,9 @@ interface EditionPayload {
 }
 
 type LoadState = "loading" | "ready" | "error";
+type NewsLang = "en" | "hi";
 
-const ROTATION_MS = 3000;
-const TICK_MS = 250;
 const STORY_EXIT_MS = 280;
-const INACTIVITY_MS = 4000;
 const WATCH_FALLBACK_MS = 1600;
 const REFRESH_POLL_MS = 4 * 60 * 1000;
 const FETCH_TIMEOUT_MS = 15000;
@@ -62,11 +66,11 @@ const editionDate = new Intl.DateTimeFormat("en-GB", {
   .format(new Date())
   .toUpperCase();
 
-function formatPublishedDate(iso: string | null): string {
-  if (!iso) return "Recent";
+function formatPublishedDate(iso: string | null, lang: NewsLang = "en"): string {
+  if (!iso) return lang === "hi" ? "हाल में" : "Recent";
   const d = new Date(iso);
-  if (Number.isNaN(d.getTime())) return "Recent";
-  return new Intl.DateTimeFormat("en-GB", {
+  if (Number.isNaN(d.getTime())) return lang === "hi" ? "हाल में" : "Recent";
+  return new Intl.DateTimeFormat(lang === "hi" ? "hi-IN" : "en-GB", {
     day: "numeric",
     month: "short",
     year: "numeric",
@@ -341,11 +345,19 @@ function StageImage({ article, reduced }: { article: NewsArticle; reduced: boole
 }
 
 function SourceMeta({ article }: { article: NewsArticle }) {
+  const lang: NewsLang = article.language === "hi" ? "hi" : "en";
   return (
     <div className="flex flex-wrap items-center gap-x-2 gap-y-1 text-[11px] text-[#7a7363]">
       <span className="font-semibold text-[#56503f]">{article.sourceName}</span>
       <span aria-hidden>·</span>
-      <span>{formatPublishedDate(article.publishedAt)}</span>
+      <span>{formatPublishedDate(article.publishedAt, lang)}</span>
+      <span aria-hidden>·</span>
+      <span
+        className="rounded-none border border-[#d8cfba] bg-[#efe8d8] px-1 py-px text-[9px] font-bold uppercase tracking-[0.14em] text-[#7a7363]"
+        title={lang === "hi" ? "Original Hindi source" : "Original English source"}
+      >
+        {lang === "hi" ? "हिंदी" : "EN"}
+      </span>
       {article.location ? (
         <>
           <span aria-hidden>·</span>
@@ -378,7 +390,7 @@ function WatchItem({ article }: { article: NewsArticle }) {
         </h5>
       </div>
       {article.summary ? (
-        <p className="mt-1.5 font-serif text-xs leading-relaxed text-[#4a4234] line-clamp-2">
+        <p className="mt-1.5 font-serif text-xs leading-relaxed text-[#4a4234] line-clamp-4">
           {article.summary}
         </p>
       ) : null}
@@ -399,8 +411,15 @@ function WatchItem({ article }: { article: NewsArticle }) {
 
 export function CyberSafetyBriefingModal({ isOpen, onClose }: CyberSafetyBriefingModalProps) {
   const reducedMotion = usePrefersReducedMotion();
-  const [data, setData] = useState<EditionPayload | null>(null);
-  const [state, setState] = useState<LoadState>("loading");
+  // Separate English / Hindi editions: original content per language, separate
+  // cache entries, never mixed or translated. Switching language never shows
+  // the other language's articles.
+  const [newsLang, setNewsLang] = useState<NewsLang>("en");
+  const [editions, setEditions] = useState<Record<NewsLang, EditionPayload | null>>({
+    en: null,
+    hi: null,
+  });
+  const [states, setStates] = useState<Record<NewsLang, LoadState>>({ en: "loading", hi: "loading" });
   const [attempt, setAttempt] = useState(0);
   const [opened, setOpened] = useState(false);
 
@@ -413,6 +432,16 @@ export function CyberSafetyBriefingModal({ isOpen, onClose }: CyberSafetyBriefin
 
   const [narrationId, setNarrationId] = useState<string | null>(null);
   const [narrationProgress, setNarrationProgress] = useState(0);
+  // User-held auto-scroll: explicit pause toggle + timestamp of the last
+  // card interaction (pointer, focus, manual navigation). The tick gate
+  // freezes advancement while held; narration has its own gate.
+  const [userPaused, setUserPaused] = useState(false);
+  const userPausedRef = useRef(false);
+  const lastInteractRef = useRef(0);
+
+  const markInteracted = useCallback(() => {
+    lastInteractRef.current = Date.now();
+  }, []);
 
   const abortRef = useRef<AbortController | null>(null);
   const isOpenRef = useRef(isOpen);
@@ -435,44 +464,69 @@ export function CyberSafetyBriefingModal({ isOpen, onClose }: CyberSafetyBriefin
     setPool(nextPool);
   }, []);
 
-  const loadBriefing = useCallback(async () => {
-    abortRef.current?.abort();
-    const controller = new AbortController();
-    abortRef.current = controller;
-    setState("loading");
-    const timeoutId = window.setTimeout(() => {
-      if (abortRef.current === controller) {
-        controller.abort();
-      }
-    }, FETCH_TIMEOUT_MS);
-    try {
-      const res = await fetch("/api/news", {
-        signal: controller.signal,
-        headers: { Accept: "application/json" },
-      });
-      if (abortRef.current !== controller) {
-        clearTimeout(timeoutId);
-        return;
-      }
-      if (!res.ok) throw new Error(`HTTP ${res.status}`);
-      const body = (await res.json()) as { edition: EditionPayload };
-      if (abortRef.current !== controller) {
-        clearTimeout(timeoutId);
-        return;
-      }
-      clearTimeout(timeoutId);
-      setData(body.edition);
-      setState("ready");
-    } catch (err) {
-      clearTimeout(timeoutId);
-      if (abortRef.current !== controller) return;
-      if ((err as Error).name === "AbortError") {
-        if (isOpenRef.current) setState("error");
-        return;
-      }
-      setState("error");
-    }
+  const newsLangRef = useRef<NewsLang>("en");
+  newsLangRef.current = newsLang;
+  const data = editions[newsLang];
+  const state = states[newsLang];
+
+  const setEditionFor = useCallback((lang: NewsLang, edition: EditionPayload | null) => {
+    setEditions((prev) => ({ ...prev, [lang]: edition }));
   }, []);
+
+  const setStateFor = useCallback((lang: NewsLang, next: LoadState) => {
+    setStates((prev) => ({ ...prev, [lang]: next }));
+  }, []);
+
+  const loadBriefing = useCallback(
+    async (lang: NewsLang) => {
+      abortRef.current?.abort();
+      const controller = new AbortController();
+      abortRef.current = controller;
+      setStateFor(lang, "loading");
+      const timeoutId = window.setTimeout(() => {
+        if (abortRef.current === controller) {
+          controller.abort();
+        }
+      }, FETCH_TIMEOUT_MS);
+      try {
+        const res = await fetch(`/api/news?lang=${lang}`, {
+          signal: controller.signal,
+          headers: { Accept: "application/json" },
+        });
+        if (abortRef.current !== controller) {
+          clearTimeout(timeoutId);
+          return;
+        }
+        if (!res.ok) throw new Error(`HTTP ${res.status}`);
+        const body = (await res.json()) as { edition: EditionPayload };
+        if (abortRef.current !== controller) {
+          clearTimeout(timeoutId);
+          return;
+        }
+        clearTimeout(timeoutId);
+        // Trust-but-verify: the server tags every article; refuse a payload
+        // whose items do not match the requested language (no EN-as-HI).
+        const edition = body.edition;
+        const items = [edition.lead, ...edition.stories, ...edition.cyberWatch].filter(
+          (a): a is NewsArticle => a !== null
+        );
+        if (items.length > 0 && items.some((a) => (a.language ?? "en") !== lang)) {
+          throw new Error(`language mismatch in ${lang} edition`);
+        }
+        setEditionFor(lang, edition);
+        setStateFor(lang, "ready");
+      } catch (err) {
+        clearTimeout(timeoutId);
+        if (abortRef.current !== controller) return;
+        if ((err as Error).name === "AbortError") {
+          if (isOpenRef.current) setStateFor(lang, "error");
+          return;
+        }
+        setStateFor(lang, "error");
+      }
+    },
+    [setEditionFor, setStateFor]
+  );
 
   useEffect(() => {
     isOpenRef.current = isOpen;
@@ -480,7 +534,7 @@ export function CyberSafetyBriefingModal({ isOpen, onClose }: CyberSafetyBriefin
       abortRef.current?.abort();
       return;
     }
-    loadBriefing();
+    loadBriefing(newsLangRef.current);
     return () => abortRef.current?.abort();
   }, [isOpen, loadBriefing, attempt]);
 
@@ -511,6 +565,31 @@ export function CyberSafetyBriefingModal({ isOpen, onClose }: CyberSafetyBriefin
     setNarrationId(null);
     setNarrationProgress(0);
   }, []);
+
+  /**
+   * Language switch: stop any active playback FIRST (no overlapping speech,
+   * no English audio over Hindi cards), reset the carousel, then show the
+   * cached edition or fetch it fresh. A failed Hindi fetch shows the error
+   * state — English articles are never substituted as Hindi content.
+   */
+  const switchNewsLang = useCallback(
+    (lang: NewsLang) => {
+      if (lang === newsLangRef.current) return;
+      stopNarration();
+      leadIndexRef.current = 0;
+      setLeadIndex(0);
+      progressRef.current = 0;
+      setProgress(0);
+      // Fresh edition, fresh cadence: don't let the old language's
+      // interaction hold freeze the new content. Explicit user pause persists.
+      lastInteractRef.current = 0;
+      setNewsLang(lang);
+      if (!editions[lang]) {
+        void loadBriefing(lang);
+      }
+    },
+    [stopNarration, editions, loadBriefing]
+  );
 
   const changeLead = useCallback(
     (index: number) => {
@@ -545,11 +624,32 @@ export function CyberSafetyBriefingModal({ isOpen, onClose }: CyberSafetyBriefin
     changeLead(nextLeadIndex(leadIndexRef.current, poolRef.current.length));
   }, [changeLead]);
 
+  /** Manual navigation: freezes auto-advance (hold window) and never fights narration. */
+  const userChangeLead = useCallback(
+    (index: number) => {
+      markInteracted();
+      changeLead(index);
+    },
+    [changeLead, markInteracted]
+  );
+
   useEffect(() => {
-    if (!isOpen || reducedMotion || state !== "ready" || poolRef.current.length < 2) return;
+    userPausedRef.current = userPaused;
+  }, [userPaused]);
+
+  useEffect(() => {
+    if (!isOpen || state !== "ready" || poolRef.current.length < 2) return;
     const timer = window.setInterval(() => {
-      if (narrationIdRef.current !== null || exitingRef.current) return;
-      progressRef.current += TICK_MS / ROTATION_MS;
+      const gate = shouldAutoAdvance({
+        narrating: narrationIdRef.current !== null,
+        exiting: exitingRef.current,
+        userPaused: userPausedRef.current,
+        msSinceInteraction: Date.now() - lastInteractRef.current,
+        reducedMotion,
+        poolSize: poolRef.current.length,
+      });
+      if (!gate) return;
+      progressRef.current = tickProgress(progressRef.current);
       if (progressRef.current >= 1) {
         progressRef.current = 0;
         setProgress(0);
@@ -557,7 +657,7 @@ export function CyberSafetyBriefingModal({ isOpen, onClose }: CyberSafetyBriefin
       } else {
         setProgress(progressRef.current);
       }
-    }, TICK_MS);
+    }, NEWS_AUTO_SCROLL_TICK_MS);
     return () => clearInterval(timer);
   }, [isOpen, reducedMotion, state, rotateLead]);
 
@@ -584,10 +684,13 @@ export function CyberSafetyBriefingModal({ isOpen, onClose }: CyberSafetyBriefin
   useEffect(() => {
     if (!isOpen) return;
     const poll = window.setInterval(async () => {
+      const lang = newsLangRef.current;
       try {
-        const res = await fetch("/api/news", { headers: { Accept: "application/json" } });
+        const res = await fetch(`/api/news?lang=${lang}`, { headers: { Accept: "application/json" } });
         if (!res.ok) return;
         const body = (await res.json()) as { edition: EditionPayload };
+        if (newsLangRef.current !== lang) return;
+        setEditionFor(lang, body.edition);
         const freshPool = buildRotationPool({
           lead: body.edition.lead,
           stories: body.edition.stories,
@@ -606,7 +709,7 @@ export function CyberSafetyBriefingModal({ isOpen, onClose }: CyberSafetyBriefin
       }
     }, REFRESH_POLL_MS);
     return () => clearInterval(poll);
-  }, [isOpen, applyPool]);
+  }, [isOpen, applyPool, setEditionFor]);
 
   useEffect(() => {
     narrationIdRef.current = narrationId;
@@ -646,6 +749,10 @@ export function CyberSafetyBriefingModal({ isOpen, onClose }: CyberSafetyBriefin
       document.body.style.overflow = "";
       if (exitTimerRef.current) clearTimeout(exitTimerRef.current);
       if (watchFallbackTimerRef.current) clearTimeout(watchFallbackTimerRef.current);
+      // Unmount/close while narrating: cancel audio so no stale callback can
+      // resume, advance, or set state after unmount.
+      stopNarration();
+      abortRef.current?.abort();
     };
   }, [isOpen, stopNarration]);
 
@@ -660,10 +767,14 @@ export function CyberSafetyBriefingModal({ isOpen, onClose }: CyberSafetyBriefin
       const text = buildNarration(article);
       narrationLenRef.current = text.length;
       speakTargetRef.current = article.id;
-      const voice = await resolveFemaleVoice("en");
+      // TTS language follows the ARTICLE's original language: Hindi news is
+      // spoken with the Hindi voice (hi-IN Swara), English with English.
+      // Never translated — a Hindi article is never read in English.
+      const articleLang: NewsLang = article.language === "hi" ? "hi" : "en";
+      const voice = await resolveFemaleVoice(articleLang);
       if (speakTargetRef.current !== article.id) return;
       const handle = speakWithEngine(text, voice, {
-        language: "en",
+        language: articleLang,
         rate: 1.02,
         onStart: () => {
           if (speakTargetRef.current !== article.id) return;
@@ -681,11 +792,12 @@ export function CyberSafetyBriefingModal({ isOpen, onClose }: CyberSafetyBriefin
           speakHandleRef.current = null;
           setNarrationId(null);
           setNarrationProgress(0);
-          // Automatically advance to next story after narration finishes
-          if (poolRef.current.length > 1 && !reducedMotion) {
-            const nextIdx = nextLeadIndex(leadIndexRef.current, poolRef.current.length);
-            changeLead(nextIdx);
-          }
+          // Narration completed: stay on THIS card and restart the cadence
+          // from zero — the next card must NOT start immediately when audio
+          // ends. Auto-scroll resumes only after a full interval (unless the
+          // user explicitly paused it, which persists).
+          progressRef.current = 0;
+          setProgress(0);
         },
         onError: () => {
           if (speakTargetRef.current !== article.id) return;
@@ -724,7 +836,7 @@ export function CyberSafetyBriefingModal({ isOpen, onClose }: CyberSafetyBriefin
 
   const promoteStory = (article: NewsArticle) => {
     const idx = poolRef.current.findIndex((a) => a.id === article.id);
-    changeLead(idx >= 0 ? idx : 0);
+    userChangeLead(idx >= 0 ? idx : 0);
   };
 
   return (
@@ -744,20 +856,57 @@ export function CyberSafetyBriefingModal({ isOpen, onClose }: CyberSafetyBriefin
         onClick={(e) => e.stopPropagation()}
       >
         {/* Top control bar */}
-        <div className="flex shrink-0 items-center justify-between border-b border-[#ded5c0] bg-[#efe8d8] px-4 sm:px-8 py-2">
+        <div className="flex shrink-0 items-center justify-between gap-2 border-b border-[#ded5c0] bg-[#efe8d8] px-4 sm:px-8 py-2">
           <span className="flex items-center gap-1.5 text-[10px] font-bold uppercase tracking-[0.28em] text-[#7a7363]">
             <Newspaper className="h-3.5 w-3.5 text-[#9f1239]" />
-            Cybercrime Intelligence · Safety Desk
+            <span className="hidden sm:inline">Cybercrime Intelligence · Safety Desk</span>
+            <span className="sm:hidden">Safety Desk</span>
           </span>
-          <button
-            type="button"
-            onClick={() => onCloseRef.current()}
-            aria-label="Close briefing"
-            className="group inline-flex items-center gap-1.5 rounded-none border border-[#d8cfba] bg-[#fdfaf3] px-2.5 py-1 text-[#4a4436] hover:border-[#9f1239] hover:bg-[#9f1239] hover:text-[#fbf8f1] transition"
-          >
-            <span className="text-[10px] font-bold uppercase tracking-[0.25em]">Close</span>
-            <X className="h-4 w-4" />
-          </button>
+          <div className="flex items-center gap-2">
+            {/* News language switch: separate original editions, never translated */}
+            <div
+              role="group"
+              aria-label="News language: original English or original Hindi sources"
+              title="English fetches original English news · Hindi fetches original Hindi news"
+              className="flex items-center gap-0.5 rounded-none border border-[#d8cfba] bg-[#fdfaf3] p-0.5"
+            >
+              <button
+                type="button"
+                onClick={() => switchNewsLang("en")}
+                aria-pressed={newsLang === "en"}
+                title="Original English news (The Indian Express, The Times of India and more)"
+                className={`px-2.5 py-1 text-[10px] font-bold uppercase tracking-[0.18em] transition ${
+                  newsLang === "en"
+                    ? "bg-[#9f1239] text-[#fbf8f1]"
+                    : "text-[#7a7363] hover:text-[#9f1239]"
+                }`}
+              >
+                EN
+              </button>
+              <button
+                type="button"
+                onClick={() => switchNewsLang("hi")}
+                aria-pressed={newsLang === "hi"}
+                title="मूल हिंदी समाचार (बीबीसी हिंदी, नवभारत टाइम्स)"
+                className={`px-2.5 py-1 text-[10px] font-bold uppercase tracking-[0.18em] transition ${
+                  newsLang === "hi"
+                    ? "bg-[#9f1239] text-[#fbf8f1]"
+                    : "text-[#7a7363] hover:text-[#9f1239]"
+                }`}
+              >
+                हिंदी
+              </button>
+            </div>
+            <button
+              type="button"
+              onClick={() => onCloseRef.current()}
+              aria-label="Close briefing"
+              className="group inline-flex items-center gap-1.5 rounded-none border border-[#d8cfba] bg-[#fdfaf3] px-2.5 py-1 text-[#4a4436] hover:border-[#9f1239] hover:bg-[#9f1239] hover:text-[#fbf8f1] transition"
+            >
+              <span className="text-[10px] font-bold uppercase tracking-[0.25em]">Close</span>
+              <X className="h-4 w-4" />
+            </button>
+          </div>
         </div>
 
         {/* Masthead */}
@@ -820,21 +969,28 @@ export function CyberSafetyBriefingModal({ isOpen, onClose }: CyberSafetyBriefin
           onTouchStart={(e) => {
             touchXRef.current = e.touches[0].clientX;
           }}
-          onTouchEnd={(e) => {
-            if (touchXRef.current === null) return;
-            const dx = e.changedTouches[0].clientX - touchXRef.current;
-            touchXRef.current = null;
-            if (Math.abs(dx) > SWIPE_THRESHOLD_PX && poolRef.current.length > 1) {
-              changeLead(dx < 0 ? leadIndexRef.current + 1 : leadIndexRef.current - 1);
-            }
-          }}
+            onTouchEnd={(e) => {
+              if (touchXRef.current === null) return;
+              const dx = e.changedTouches[0].clientX - touchXRef.current;
+              touchXRef.current = null;
+              if (Math.abs(dx) > SWIPE_THRESHOLD_PX && poolRef.current.length > 1) {
+                userChangeLead(dx < 0 ? leadIndexRef.current + 1 : leadIndexRef.current - 1);
+              }
+            }}
+          onPointerDown={markInteracted}
+          onFocusCapture={markInteracted}
         >
           <NewspaperBackground />
           {state === "loading" && (
             <div className="flex flex-col items-center justify-center gap-3 px-6 py-24 text-center">
               <Loader2 className="h-8 w-8 animate-spin text-[#9f1239]" />
               <p className="text-xs font-semibold uppercase tracking-[0.25em] text-[#7a7363]">
-                The news desk is setting today&apos;s edition…
+                {newsLang === "hi"
+                  ? "न्यूज़ डेस्क आज का हिंदी संस्करण तैयार कर रहा है…"
+                  : "The news desk is setting today's edition…"}
+              </p>
+              <p className="text-[10px] uppercase tracking-[0.2em] text-[#a49b84]">
+                {newsLang === "hi" ? "मूल हिंदी स्रोत" : "Original English sources"}
               </p>
             </div>
           )}
@@ -843,10 +999,12 @@ export function CyberSafetyBriefingModal({ isOpen, onClose }: CyberSafetyBriefin
             <div className="flex flex-col items-center justify-center gap-4 px-6 py-24 text-center">
               <Newspaper className="h-9 w-9 text-[#b7ac93]" />
               <p className="max-w-md font-serif text-2xl font-bold text-[#221e18]">
-                Cyber safety briefing
+                {newsLang === "hi" ? "साइबर सुरक्षा ब्रीफिंग" : "Cyber safety briefing"}
               </p>
               <p className="max-w-md text-sm text-[#7a7363]">
-                Today&apos;s cyber briefing could not be loaded.
+                {newsLang === "hi"
+                  ? "आज की हिंदी ब्रीफिंग लोड नहीं हो सकी। अंग्रेज़ी खबरों को हिंदी बताकर नहीं दिखाया जाता — कृपया पुनः प्रयास करें।"
+                  : "Today's cyber briefing could not be loaded."}
               </p>
               <button
                 type="button"
@@ -854,7 +1012,7 @@ export function CyberSafetyBriefingModal({ isOpen, onClose }: CyberSafetyBriefin
                 className="inline-flex items-center gap-2 rounded-none border border-[#9f1239]/50 bg-[#fbf8f1] px-4 py-2 text-[11px] font-bold uppercase tracking-[0.2em] text-[#9f1239] hover:bg-[#9f1239] hover:text-[#fbf8f1] transition"
               >
                 <RefreshCw className="h-3.5 w-3.5" />
-                Retry
+                {newsLang === "hi" ? "पुनः प्रयास करें" : "Retry"}
               </button>
             </div>
           )}
@@ -865,7 +1023,7 @@ export function CyberSafetyBriefingModal({ isOpen, onClose }: CyberSafetyBriefin
               <div className={animCls("csb-anim-up")} style={animDelay(0)}>
                 <div className="flex items-center justify-center gap-4 text-[10px] font-bold uppercase tracking-[0.34em] text-[#8a7f6c]">
                   <span className="h-px w-10 bg-[#d8cfba]" aria-hidden />
-                  Featured cyber report
+                  {newsLang === "hi" ? "प्रमुख साइबर रिपोर्ट" : "Featured cyber report"}
                   <span className="h-px w-10 bg-[#d8cfba]" aria-hidden />
                 </div>
 
@@ -873,7 +1031,7 @@ export function CyberSafetyBriefingModal({ isOpen, onClose }: CyberSafetyBriefin
                   <button
                     type="button"
                     aria-label="Previous story"
-                    onClick={() => changeLead(leadIndexRef.current - 1)}
+                    onClick={() => userChangeLead(leadIndexRef.current - 1)}
                     disabled={pool.length < 2}
                     className="hidden shrink-0 self-center rounded-none border border-[#d8cfba] bg-[#fdfaf3] p-2 text-[#7a7363] hover:border-[#9f1239] hover:text-[#9f1239] disabled:opacity-30 sm:block"
                   >
@@ -892,12 +1050,22 @@ export function CyberSafetyBriefingModal({ isOpen, onClose }: CyberSafetyBriefin
                             : "csb-anim-story-in"
                       }`}
                     >
-                      <div className="flex flex-col sm:flex-row gap-5 p-4 sm:p-6">
+                      <div className="flex flex-col gap-5 p-5 sm:flex-row sm:gap-6 sm:p-8 min-h-[300px] sm:min-h-[340px]">
                         <StageImage article={lead} reduced={reducedMotion} />
                         <div className="flex-1 min-w-0">
                           <div className="flex flex-wrap items-center gap-2">
                             <span className="rounded-none bg-[#9f1239] px-2 py-0.5 text-[9px] font-bold uppercase tracking-[0.2em] text-[#fbf8f1]">
                               {lead.category}
+                            </span>
+                            <span
+                              className="rounded-none border border-[#d8cfba] bg-[#efe8d8] px-1.5 py-0.5 text-[9px] font-bold uppercase tracking-[0.18em] text-[#7a7363]"
+                              title={
+                                newsLang === "hi"
+                                  ? "मूल हिंदी स्रोत से"
+                                  : "From original English sources"
+                              }
+                            >
+                              {newsLang === "hi" ? "मूल हिंदी" : "Original EN"}
                             </span>
                             {isReading && narrationId === lead.id ? (
                               <span className="inline-flex items-center gap-1.5 rounded-none border border-[#9f1239]/40 bg-[#f7e8e6] px-2 py-0.5 text-[9px] font-bold uppercase tracking-[0.18em] text-[#9f1239]">
@@ -972,7 +1140,7 @@ export function CyberSafetyBriefingModal({ isOpen, onClose }: CyberSafetyBriefin
                   <button
                     type="button"
                     aria-label="Next story"
-                    onClick={() => changeLead(leadIndexRef.current + 1)}
+                    onClick={() => userChangeLead(leadIndexRef.current + 1)}
                     disabled={pool.length < 2}
                     className="hidden shrink-0 self-center rounded-none border border-[#d8cfba] bg-[#fdfaf3] p-2 text-[#7a7363] hover:border-[#9f1239] hover:text-[#9f1239] disabled:opacity-30 sm:block"
                   >
@@ -980,7 +1148,7 @@ export function CyberSafetyBriefingModal({ isOpen, onClose }: CyberSafetyBriefin
                   </button>
                 </div>
 
-                {/* Story dots + rotation progress */}
+                {/* Story dots + rotation progress + auto-scroll pause */}
                 <div className="mt-3 flex flex-col items-center gap-2">
                   <div className="flex items-center gap-2">
                     {pool.map((story, i) => (
@@ -989,12 +1157,31 @@ export function CyberSafetyBriefingModal({ isOpen, onClose }: CyberSafetyBriefin
                         type="button"
                         aria-label={`Go to story ${i + 1} of ${pool.length}`}
                         aria-current={i === leadIndex ? "true" : undefined}
-                        onClick={() => changeLead(i)}
+                        onClick={() => userChangeLead(i)}
                         className={`h-2 w-2 rounded-full transition hover:scale-125 ${
                           i === leadIndex ? "bg-[#9f1239]" : "bg-[#d8cfba]"
                         }`}
                       />
                     ))}
+                    {canRotate && (
+                      <button
+                        type="button"
+                        onClick={() => {
+                          markInteracted();
+                          setUserPaused((p) => !p);
+                        }}
+                        aria-pressed={userPaused}
+                        aria-label={userPaused ? "Resume auto-scroll" : "Pause auto-scroll"}
+                        title={userPaused ? "Resume auto-scroll" : "Pause auto-scroll"}
+                        className={`ml-1 rounded-none border px-2 py-0.5 text-[9px] font-bold uppercase tracking-[0.18em] transition ${
+                          userPaused
+                            ? "border-[#9f1239] bg-[#9f1239] text-[#fbf8f1]"
+                            : "border-[#d8cfba] bg-[#fdfaf3] text-[#7a7363] hover:border-[#9f1239] hover:text-[#9f1239]"
+                        }`}
+                      >
+                        {userPaused ? "▶" : "❚❚"}
+                      </button>
+                    )}
                   </div>
                   {canRotate && (
                     <span className="block h-[2px] w-44 max-w-full overflow-hidden rounded-full bg-[#e6dfcc]" aria-hidden>
@@ -1012,28 +1199,44 @@ export function CyberSafetyBriefingModal({ isOpen, onClose }: CyberSafetyBriefin
 
               {desk.length > 0 && (
                 <>
-                  <SectionDivider label="More from the desk" />
+                  <SectionDivider label={newsLang === "hi" ? "डेस्क से और" : "More from the desk"} />
                   <ol className="border border-[#d8ceb8] bg-[#fdfaf3]">
                     {desk.map((story, i) => (
                       <li key={story.id} className="border-b border-[#ded5c0] last:border-b-0">
                         <button
                           type="button"
                           onClick={() => promoteStory(story)}
-                          className="group flex w-full items-start gap-3 px-3 py-3 text-left transition hover:bg-[#f3edde]"
+                          className="group flex w-full items-start gap-3 px-3 py-4 text-left transition hover:bg-[#f3edde] sm:px-4 sm:py-5"
                         >
                           <span className="pt-0.5 font-serif text-sm italic text-[#8a7f6c] group-hover:text-[#9f1239]">
                             {String(i + 1).padStart(2, "0")}
                           </span>
                           <span className="min-w-0 flex-1">
-                            <h4 className="font-serif text-[15px] font-bold leading-snug text-[#221e18] group-hover:text-[#9f1239] sm:text-base">
+                            <span className="mb-1 block text-[9px] font-bold uppercase tracking-[0.2em] text-[#9f1239]">
+                              {story.category}
+                            </span>
+                            <h4 className="font-serif text-base font-bold leading-snug text-[#221e18] group-hover:text-[#9f1239] sm:text-lg">
                               {story.title}
                             </h4>
-                            <span className="mt-1 block text-[11px] text-[#7a7363]">
-                              <span className="font-semibold text-[#9f1239]">{story.category}</span>
+                            {story.summary ? (
+                              <span className="mt-1.5 block font-serif text-[13px] leading-relaxed text-[#4a4234] line-clamp-4">
+                                {story.summary}
+                              </span>
+                            ) : null}
+                            <span className="mt-1.5 block text-[11px] text-[#7a7363]">
+                              <span className="font-semibold text-[#56503f]">{story.sourceName}</span>
                               {" · "}
-                              {story.sourceName}
+                              {formatPublishedDate(story.publishedAt, newsLang)}
                               {" · "}
-                              {formatPublishedDate(story.publishedAt)}
+                              <span className="font-semibold">
+                                {newsLang === "hi" ? "हिंदी" : "EN"}
+                              </span>
+                              {story.location ? (
+                                <>
+                                  {" · "}
+                                  {story.location}
+                                </>
+                              ) : null}
                             </span>
                           </span>
                           <ChevronRight className="mt-1 h-4 w-4 shrink-0 text-[#b7ac93] transition-transform group-hover:translate-x-1 group-hover:text-[#9f1239]" />
@@ -1046,7 +1249,7 @@ export function CyberSafetyBriefingModal({ isOpen, onClose }: CyberSafetyBriefin
 
               {watch.length > 0 && (
                 <>
-                  <SectionDivider label="Cyber watch" />
+                  <SectionDivider label={newsLang === "hi" ? "साइबर निगरानी" : "Cyber watch"} />
                   <div ref={watchSection.ref} className="space-y-0 px-2">
                     {(watchSection.revealed || watchFallback || reducedMotion) &&
                       watch.map((item) => (
@@ -1064,8 +1267,9 @@ export function CyberSafetyBriefingModal({ isOpen, onClose }: CyberSafetyBriefin
             <div className="flex flex-col items-center justify-center gap-3 px-6 py-24 text-center">
               <Newspaper className="h-9 w-9 text-[#b7ac93]" />
               <p className="max-w-md text-sm text-[#7a7363]">
-                The News Desk is offline right now — no fresh reports are available. Please check
-                back shortly.
+                {newsLang === "hi"
+                  ? "न्यूज़ डेस्क अभी ऑफ़लाइन है — कोई ताज़ा हिंदी रिपोर्ट उपलब्ध नहीं है। कृपया थोड़ी देर बाद देखें।"
+                  : "The News Desk is offline right now — no fresh reports are available. Please check back shortly."}
               </p>
               <button
                 type="button"
@@ -1073,7 +1277,7 @@ export function CyberSafetyBriefingModal({ isOpen, onClose }: CyberSafetyBriefin
                 className="inline-flex items-center gap-2 rounded-md border border-[#9f1239]/50 bg-[#fbf8f1] px-4 py-2 text-[11px] font-bold uppercase tracking-[0.2em] text-[#9f1239] hover:bg-[#9f1239] hover:text-[#fbf8f1] transition"
               >
                 <RefreshCw className="h-3.5 w-3.5" />
-                Retry
+                {newsLang === "hi" ? "पुनः प्रयास करें" : "Retry"}
               </button>
             </div>
           )}

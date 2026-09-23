@@ -95,7 +95,7 @@ export default function ContactsPage() {
             Trusted Contacts & SOS Escalation
           </h1>
           <p className="text-sm text-slate-300">
-            Configure the verified contacts who receive instant location pings and audio evidence during a VoiceShield SOS trigger.
+            Configure your trusted contacts. Location sharing is always explicit: use the Live Location page to capture and attach your position to a case.
           </p>
         </div>
 

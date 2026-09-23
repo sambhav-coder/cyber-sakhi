@@ -62,6 +62,7 @@ export async function POST(req: NextRequest) {
       mimeType: audio.mimeType,
       voice: audio.voice,
       language,
+      words: audio.words || [],
     });
   } catch (error) {
     console.error("🧪 [TTS API] SYNTHESIS FAILED:", {

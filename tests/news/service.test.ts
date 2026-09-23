@@ -222,4 +222,69 @@ describe("news service", () => {
     expect(edition.articles).toHaveLength(1);
     expect(edition.lead?.title).toBe("Four-month-old account takeover case");
   });
+
+  it("builds a Hindi edition from original-Hindi feeds with language tags", async () => {
+    const clock = fakeClock();
+    const hiFeed: FeedConfig = {
+      id: "hindi-test",
+      name: "Hindi Test Source",
+      kind: "news",
+      feedUrl: "https://hindi.example/rss",
+      language: "hi",
+    };
+    const doc = rssDoc(
+      rssItem({
+        title: "ऑनलाइन ठगी में युवक से लाखों की धोखाधड़ी",
+        date: "2026-09-19T00:00:00Z",
+        desc: "पुलिस ने मामला दर्ज कर जांच शुरू कर दी है, साइबर सेल सक्रिय",
+        link: "https://hindi.example/story-1",
+      })
+    );
+    const service = createNewsService({
+      feeds: [hiFeed],
+      fetcher: makeFetcher({ [hiFeed.feedUrl]: doc }),
+      now: clock.now,
+    });
+    const edition = await service.getEdition({ language: "hi" });
+    expect(edition.language).toBe("hi");
+    expect(edition.cacheStatus).toBe("live");
+    expect(edition.articles).toHaveLength(1);
+    expect(edition.lead?.language).toBe("hi");
+    expect(edition.lead?.title).toContain("ऑनलाइन ठगी");
+  });
+
+  it("keeps English and Hindi caches strictly separate", async () => {
+    const clock = fakeClock();
+    const enDoc = rssDoc(
+      rssItem({ title: "English digital arrest story", date: "2026-09-19T00:00:00Z" })
+    );
+    const hiFeed: FeedConfig = {
+      id: "hindi-test",
+      name: "Hindi Test Source",
+      kind: "news",
+      feedUrl: "https://hindi.example/rss",
+      language: "hi",
+    };
+    const hiDoc = rssDoc(
+      rssItem({
+        title: "डिजिटल अरेस्ट बताकर ठगी",
+        date: "2026-09-19T00:00:00Z",
+        desc: "पुलिस जांच कर रही है",
+        link: "https://hindi.example/story-2",
+      })
+    );
+    const service = createNewsService({
+      feeds: [feedA, hiFeed],
+      fetcher: makeFetcher({ [feedA.feedUrl]: enDoc, [hiFeed.feedUrl]: hiDoc }),
+      now: clock.now,
+    });
+    const en = await service.getEdition({ language: "en" });
+    const hi = await service.getEdition({ language: "hi" });
+    expect(en.language).toBe("en");
+    expect(hi.language).toBe("hi");
+    expect(hi.lead?.language).toBe("hi");
+    const cachedHi = await service.getEdition({ language: "hi" });
+    expect(cachedHi.cacheStatus).toBe("cached");
+    expect(cachedHi.lead?.title).toBe(hi.lead?.title);
+  });
 });

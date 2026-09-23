@@ -1,5 +1,8 @@
 export type NewsSourceKind = "government" | "news";
 
+/** Original content language of a feed / article. Never translated. */
+export type NewsLanguage = "en" | "hi";
+
 export interface FeedConfig {
   id: string;
   name: string;
@@ -7,6 +10,8 @@ export interface FeedConfig {
   feedUrl: string;
   homeUrl?: string;
   section?: string;
+  /** Original feed language; defaults to "en" when omitted. */
+  language?: NewsLanguage;
 }
 
 export interface RawFeedItem {
@@ -33,6 +38,8 @@ export interface NewsArticle {
   location: string | null;
   imageUrl: string | null;
   verifiedSource: boolean;
+  /** Original article language (from its feed). Displayed + spoken as-is. */
+  language: NewsLanguage;
 }
 
 export type EditionCacheStatus = "live" | "cached" | "offline";
@@ -41,6 +48,8 @@ export interface NewsEdition {
   preparedAt: string;
   fetchedAt: string;
   cacheStatus: EditionCacheStatus;
+  /** Which language edition this is — EN and HI are fetched/cached separately. */
+  language: NewsLanguage;
   feedsTotal: number;
   feedsOk: number;
   articles: NewsArticle[];

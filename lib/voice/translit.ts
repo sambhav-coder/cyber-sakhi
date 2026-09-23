@@ -1,13 +1,14 @@
 /**
  * Hinglish → Devanagari conversion for HINDI SPEECH QUALITY.
  *
- * Why this exists: Sakhi's Hindi/Hinglish pipeline detects language and picks
- * the LOCAL piper `hi_IN-priyamvada-medium` voice. Gemini's Hinglish replies are
- * written in ROMAN script, and an Indian TTS reading raw roman text letter-by-
- * letter is exactly the robotic "A A, P P" failure the voice fix must kill.
- * So, BEFORE any Hindi/Hinglish synthesis, every roman (latin) segment of the
- * text is transliterated to proper Devanagari. The Hindi voice then reads
- * natural Hindi — no cloud, no keys, no copied proprietary code.
+ * Why this exists: Sakhi's Hindi/Hinglish pipeline detects language and the
+ * server's Hindi TTS (hi-IN Swara via Edge TTS) reads Devanagari naturally.
+ * Gemini's Hinglish replies are written in ROMAN script, and an Indian TTS
+ * reading raw roman text letter-by-letter is exactly the robotic "A A, P P"
+ * failure the voice fix must kill. So, BEFORE any Hindi/Hinglish synthesis,
+ * every roman (latin) segment of the text is transliterated to proper
+ * Devanagari. The Hindi voice then reads natural Hindi — no cloud, no keys,
+ * no copied proprietary code.
  *
  * Honest about fidelity: this is a pragmatic Hinglish→Devanagari transliterator
  * (longest-match consonants, matras, conjunct viramas, anusvara for homorganic
