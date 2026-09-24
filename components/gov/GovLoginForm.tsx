@@ -4,20 +4,24 @@ import React, { useCallback, useState } from "react";
 import Link from "next/link";
 import { useRouter } from "next/navigation";
 import {
+  ArrowLeft,
   ArrowRight,
   CheckCircle2,
   Eye,
   EyeOff,
-  Lock,
+  KeyRound,
   Loader2,
+  Lock,
   Shield,
   ShieldAlert,
   ShieldCheck,
+  Smartphone,
   UserRound,
 } from "lucide-react";
 import { CyberSakhiLogo } from "@/components/CyberSakhiLogo";
 
 type FormStatus = "idle" | "submitting" | "redirecting";
+type LoginStep = "credentials" | "verify";
 
 const ROLE_LABELS: Record<string, string> = {
   SUPER_ADMIN: "Super Administrator",
@@ -82,7 +86,7 @@ function signinErrorFor(status: number, code: string | null, message: string | n
     return "Sign-in service is temporarily unavailable. Try again shortly.";
   }
   if (status === 401) {
-    return "Invalid sign-in credentials. Check your user ID and password.";
+    return "Invalid sign-in credentials. Check your Officer ID, password, and authenticator code.";
   }
   if (code === "BAD_REQUEST") {
     return message ?? "Check your details and try again.";
@@ -92,10 +96,12 @@ function signinErrorFor(status: number, code: string | null, message: string | n
 
 export const GovLoginForm: React.FC<{ officers: GovRosterOfficerLike[] }> = ({ officers }) => {
   const router = useRouter();
+  const [step, setStep] = useState<LoginStep>("credentials");
   const [selectedCode, setSelectedCode] = useState("");
   const [userId, setUserId] = useState("");
   const [password, setPassword] = useState("");
   const [mfaCode, setMfaCode] = useState("");
+  const [useRecovery, setUseRecovery] = useState(false);
   const [showPassword, setShowPassword] = useState(false);
   const [status, setStatus] = useState<FormStatus>("idle");
   const [errorMessage, setErrorMessage] = useState<string | null>(null);
@@ -107,9 +113,21 @@ export const GovLoginForm: React.FC<{ officers: GovRosterOfficerLike[] }> = ({ o
     setErrorMessage(null);
     const officer = officers.find((o) => o.officer_code === code);
     if (officer) {
-      setUserId(officer.official_email);
+      // Pre-fill the Officer ID only. Official emails are never exposed
+      // on the unauthenticated login page.
+      setUserId(officer.officer_code);
       setPassword("");
     }
+  };
+
+  const handleContinue = (e: React.FormEvent) => {
+    e.preventDefault();
+    setErrorMessage(null);
+    if (!userId.trim() || !password) {
+      setErrorMessage("Enter your Officer ID and password to continue.");
+      return;
+    }
+    setStep("verify");
   };
 
   const handleSubmit = useCallback(
@@ -122,7 +140,7 @@ export const GovLoginForm: React.FC<{ officers: GovRosterOfficerLike[] }> = ({ o
         const res = await fetch("/gov/api/login", {
           method: "POST",
           headers: { "Content-Type": "application/json" },
-          body: JSON.stringify({ email: userId.trim(), password, mfaCode }),
+          body: JSON.stringify({ identifier: userId.trim(), password, mfaCode: mfaCode.trim() }),
         });
         if (res.ok) {
           setStatus("redirecting");
@@ -145,7 +163,7 @@ export const GovLoginForm: React.FC<{ officers: GovRosterOfficerLike[] }> = ({ o
         setErrorMessage("A network error occurred. Please try again.");
       }
     },
-    [userId, password, router, status],
+    [userId, password, mfaCode, router, status],
   );
 
   const busy = status === "submitting" || status === "redirecting";
@@ -165,141 +183,258 @@ export const GovLoginForm: React.FC<{ officers: GovRosterOfficerLike[] }> = ({ o
                 Government Portal — Authorised Access Only
               </p>
             </div>
-
-            <div>
-              <label htmlFor="gov-mfa-code" className="gov-label">Authenticator code</label>
-              <input id="gov-mfa-code" type="text" name="mfaCode" inputMode="numeric" autoComplete="one-time-code" required pattern="[0-9]{6}" maxLength={6} value={mfaCode} onChange={(e) => { setMfaCode(e.target.value.replace(/\D/g, "")); setErrorMessage(null); }} className="gov-input" placeholder="6-digit code" disabled={busy} />
-              <p className="gov-hint mt-1.5">Enter the current code from your enrolled authenticator app.</p>
-            </div>
           </div>
 
-          <form onSubmit={handleSubmit} className="space-y-4" aria-label="Officer login form">
-            {rosterAvailable && (
-              <div>
-                <label htmlFor="gov-officer-select" className="gov-label">
-                  Select Officer
-                </label>
-                <div className="relative">
-                  <select
-                    id="gov-officer-select"
-                    name="officerCode"
-                    value={selectedCode}
-                    onChange={(e) => handleOfficerChange(e.target.value)}
-                    className="gov-input appearance-none pr-11"
-                    disabled={busy}
-                  >
-                    <option value="">— Choose your officer account —</option>
-                    {officers.map((o) => {
-                      const jurisdiction = jurisdictionOf(o);
-                      return (
-                        <option key={o.officer_code} value={o.officer_code}>
-                          {o.officer_code} · {o.full_name}
-                          {o.role ? ` (${ROLE_LABELS[o.role] ?? o.role})` : ""}
-                          {jurisdiction ? ` · ${jurisdiction}` : ""}
-                        </option>
-                      );
-                    })}
-                  </select>
-                  <UserRound className="pointer-events-none absolute inset-y-0 right-3.5 my-auto h-4 w-4 text-slate-500" />
+          {step === "credentials" ? (
+            <form onSubmit={handleContinue} className="space-y-4" aria-label="Officer credentials form">
+              {rosterAvailable && (
+                <div>
+                  <label htmlFor="gov-officer-select" className="gov-label">
+                    Select Officer
+                  </label>
+                  <div className="relative">
+                    <select
+                      id="gov-officer-select"
+                      name="officerCode"
+                      value={selectedCode}
+                      onChange={(e) => handleOfficerChange(e.target.value)}
+                      className="gov-input appearance-none pr-11"
+                      disabled={busy}
+                    >
+                      <option value="">— Choose your officer account —</option>
+                      {officers.map((o) => {
+                        const jurisdiction = jurisdictionOf(o);
+                        return (
+                          <option key={o.officer_code} value={o.officer_code}>
+                            {o.officer_code} · {o.full_name}
+                            {o.role ? ` (${ROLE_LABELS[o.role] ?? o.role})` : ""}
+                            {jurisdiction ? ` · ${jurisdiction}` : ""}
+                          </option>
+                        );
+                      })}
+                    </select>
+                    <UserRound className="pointer-events-none absolute inset-y-0 right-3.5 my-auto h-4 w-4 text-slate-500" />
+                  </div>
+                  <p className="gov-hint mt-1.5">
+                    Choosing an officer pre-fills your Officer ID. You can still type any ID manually.
+                  </p>
                 </div>
-                <p className="gov-hint mt-1.5">
-                  Choosing an officer pre-fills your user ID. You can still type any ID manually.
-                </p>
-              </div>
-            )}
+              )}
 
-            <div>
-              <label htmlFor="gov-user-id" className="gov-label">
-                User ID (Government Email)
-              </label>
-              <input
-                id="gov-user-id"
-                type="email"
-                name="email"
-                autoComplete="username"
-                inputMode="email"
-                required
-                spellCheck={false}
-                autoCapitalize="none"
-                value={userId}
-                onChange={(e) => {
-                  setUserId(e.target.value);
-                  setErrorMessage(null);
-                }}
-                className="gov-input"
-                placeholder="officer@gov.example"
-                disabled={busy}
-              />
-            </div>
-
-            <div>
-              <div className="flex items-baseline justify-between">
-                <label htmlFor="gov-password" className="gov-label">
-                  Password
+              <div>
+                <label htmlFor="gov-user-id" className="gov-label">
+                  Officer ID
                 </label>
-                <span className="gov-hint">8+ characters</span>
-              </div>
-              <div className="relative">
                 <input
-                  id="gov-password"
-                  type={showPassword ? "text" : "password"}
-                  name="password"
-                  autoComplete="current-password"
+                  id="gov-user-id"
+                  type="text"
+                  name="identifier"
+                  autoComplete="username"
                   required
-                  minLength={8}
-                  value={password}
+                  spellCheck={false}
+                  autoCapitalize="characters"
+                  value={userId}
                   onChange={(e) => {
-                    setPassword(e.target.value);
+                    setUserId(e.target.value.toUpperCase());
                     setErrorMessage(null);
                   }}
-                  className="gov-input pr-11"
-                  placeholder="••••••••••••"
-                  enterKeyHint="go"
+                  className="gov-input font-mono"
+                  placeholder="DL-CYB-0001"
                   disabled={busy}
                 />
+                <p className="gov-hint mt-1.5">Your Officer ID (e.g. DL-CYB-0001), or official email.</p>
+              </div>
+
+              <div>
+                <div className="flex items-baseline justify-between">
+                  <label htmlFor="gov-password" className="gov-label">
+                    Password
+                  </label>
+                  <span className="gov-hint">8+ characters</span>
+                </div>
+                <div className="relative">
+                  <input
+                    id="gov-password"
+                    type={showPassword ? "text" : "password"}
+                    name="password"
+                    autoComplete="current-password"
+                    required
+                    minLength={8}
+                    value={password}
+                    onChange={(e) => {
+                      setPassword(e.target.value);
+                      setErrorMessage(null);
+                    }}
+                    className="gov-input pr-11"
+                    placeholder="••••••••••••"
+                    enterKeyHint="go"
+                    disabled={busy}
+                  />
+                  <button
+                    type="button"
+                    onClick={() => setShowPassword((v) => !v)}
+                    className="absolute inset-y-0 right-0 flex w-11 items-center justify-center text-slate-400 transition hover:text-slate-200"
+                    aria-label={showPassword ? "Hide password" : "Show password"}
+                    aria-pressed={showPassword}
+                    disabled={busy}
+                  >
+                    {showPassword ? <EyeOff className="h-4 w-4" /> : <Eye className="h-4 w-4" />}
+                  </button>
+                </div>
+              </div>
+
+              <button type="submit" className="gov-btn-primary w-full" disabled={busy}>
+                {busy ? (
+                  <Loader2 className="h-4 w-4 animate-spin" />
+                ) : (
+                  <ArrowRight className="h-4 w-4" />
+                )}
+                Continue
+              </button>
+
+              {errorMessage && (
+                <p
+                  id="gov-login-error"
+                  role="alert"
+                  className="flex items-start gap-2 rounded-xl border border-red-400/25 bg-red-400/10 px-4 py-3 text-xs leading-relaxed text-red-200"
+                >
+                  <ShieldAlert className="mt-0.5 h-4 w-4 shrink-0" />
+                  <span>{errorMessage}</span>
+                </p>
+              )}
+
+              <div className="flex items-center justify-between text-xs">
+                <Link href="/gov/login/forgot-id" className="font-semibold text-slate-400 transition hover:text-teal-300">
+                  Forgot User ID?
+                </Link>
+                <Link href="/gov/login/forgot-password" className="font-semibold text-slate-400 transition hover:text-teal-300">
+                  Forgot Password?
+                </Link>
+              </div>
+            </form>
+          ) : (
+            <form onSubmit={handleSubmit} className="space-y-4" aria-label="Officer verification form">
+              <div className="rounded-xl border border-slate-700/60 bg-slate-900/40 px-4 py-3 text-xs text-slate-400">
+                Signing in as <span className="font-mono font-bold text-slate-200">{userId.trim() || "—"}</span>
+              </div>
+
+              {!useRecovery ? (
+                <div>
+                  <label htmlFor="gov-mfa-code" className="gov-label">
+                    Authenticator code
+                  </label>
+                  <div className="relative">
+                    <input
+                      id="gov-mfa-code"
+                      type="text"
+                      name="mfaCode"
+                      inputMode="numeric"
+                      autoComplete="one-time-code"
+                      required
+                      pattern="[0-9]{6}"
+                      maxLength={6}
+                      value={mfaCode}
+                      onChange={(e) => {
+                        setMfaCode(e.target.value.replace(/\D/g, ""));
+                        setErrorMessage(null);
+                      }}
+                      className="gov-input pr-11 text-center font-mono text-lg tracking-[0.3em]"
+                      placeholder="••••••"
+                      disabled={busy}
+                      autoFocus
+                    />
+                    <Smartphone className="pointer-events-none absolute inset-y-0 right-3.5 my-auto h-4 w-4 text-slate-500" />
+                  </div>
+                  <p className="gov-hint mt-1.5">Enter the current 6-digit code from your enrolled authenticator app.</p>
+                </div>
+              ) : (
+                <div>
+                  <label htmlFor="gov-recovery-code" className="gov-label">
+                    Recovery code
+                  </label>
+                  <div className="relative">
+                    <input
+                      id="gov-recovery-code"
+                      type="text"
+                      name="mfaCode"
+                      autoComplete="off"
+                      required
+                      spellCheck={false}
+                      value={mfaCode}
+                      onChange={(e) => {
+                        setMfaCode(e.target.value.toUpperCase());
+                        setErrorMessage(null);
+                      }}
+                      className="gov-input pr-11 text-center font-mono tracking-[0.15em]"
+                      placeholder="XXXX-XXXX"
+                      disabled={busy}
+                      autoFocus
+                    />
+                    <KeyRound className="pointer-events-none absolute inset-y-0 right-3.5 my-auto h-4 w-4 text-slate-500" />
+                  </div>
+                  <p className="gov-hint mt-1.5">Each recovery code works once. Generate a fresh set after signing in.</p>
+                </div>
+              )}
+
+              <button type="submit" className="gov-btn-primary w-full" disabled={busy}>
+                {busy ? (
+                  <Loader2 className="h-4 w-4 animate-spin" />
+                ) : (
+                  <Lock className="h-4 w-4" />
+                )}
+                {status === "redirecting"
+                  ? "Opening Console…"
+                  : status === "submitting"
+                    ? "Verifying…"
+                    : "Verify & Sign In"}
+              </button>
+
+              {errorMessage && (
+                <p
+                  id="gov-login-error"
+                  role="alert"
+                  className="flex items-start gap-2 rounded-xl border border-red-400/25 bg-red-400/10 px-4 py-3 text-xs leading-relaxed text-red-200"
+                >
+                  <ShieldAlert className="mt-0.5 h-4 w-4 shrink-0" />
+                  <span>{errorMessage}</span>
+                </p>
+              )}
+
+              <div className="flex items-center justify-between text-xs">
                 <button
                   type="button"
-                  onClick={() => setShowPassword((v) => !v)}
-                  className="absolute inset-y-0 right-0 flex w-11 items-center justify-center text-slate-400 transition hover:text-slate-200"
-                  aria-label={showPassword ? "Hide password" : "Show password"}
-                  aria-pressed={showPassword}
+                  onClick={() => {
+                    setStep("credentials");
+                    setErrorMessage(null);
+                    setMfaCode("");
+                  }}
+                  className="flex items-center gap-1 font-semibold text-slate-400 transition hover:text-teal-300"
                   disabled={busy}
                 >
-                  {showPassword ? <EyeOff className="h-4 w-4" /> : <Eye className="h-4 w-4" />}
+                  <ArrowLeft className="h-3.5 w-3.5" />
+                  Back
+                </button>
+                <button
+                  type="button"
+                  onClick={() => {
+                    setUseRecovery((v) => !v);
+                    setErrorMessage(null);
+                    setMfaCode("");
+                  }}
+                  className="font-semibold text-slate-400 transition hover:text-teal-300"
+                  disabled={busy}
+                >
+                  {useRecovery ? "Use authenticator code instead" : "Use a recovery code instead"}
                 </button>
               </div>
-            </div>
+            </form>
+          )}
 
-            <button type="submit" className="gov-btn-primary w-full" disabled={busy}>
-              {busy ? (
-                <Loader2 className="h-4 w-4 animate-spin" />
-              ) : (
-                <Lock className="h-4 w-4" />
-              )}
-              {status === "redirecting"
-                ? "Opening Console…"
-                : status === "submitting"
-                  ? "Verifying…"
-                  : "Sign In to Portal"}
-            </button>
-
-            {errorMessage && (
-              <p
-                id="gov-login-error"
-                role="alert"
-                className="flex items-start gap-2 rounded-xl border border-red-400/25 bg-red-400/10 px-4 py-3 text-xs leading-relaxed text-red-200"
-              >
-                <ShieldAlert className="mt-0.5 h-4 w-4 shrink-0" />
-                <span>{errorMessage}</span>
-              </p>
-            )}
-
-            {rosterAvailable && (
-              <p className="gov-hint">
-                Officer list shows active officer codes only. Select one to pre-fill your user ID.
-              </p>
-            )}
-          </form>
+          {rosterAvailable && step === "credentials" && (
+            <p className="gov-hint mt-4">
+              Officer list shows active officer codes only. Select one to pre-fill your Officer ID.
+            </p>
+          )}
 
           <Link
             href="/gov"
@@ -345,11 +480,11 @@ export const GovLoginForm: React.FC<{ officers: GovRosterOfficerLike[] }> = ({ o
   );
 };
 
-// Allow the server page's roster type to flow into the client form cleanly.
+// The unauthenticated roster carries officer codes only — official emails
+// are never exposed before authentication.
 export type GovRosterOfficerLike = {
   officer_code: string;
   full_name: string;
-  official_email: string;
   role: string;
   department: string | null;
   scope: string;

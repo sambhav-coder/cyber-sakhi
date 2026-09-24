@@ -16,15 +16,18 @@
 import bcrypt from "bcryptjs";
 import type { GovOfficerContext } from "./govTypes";
 import {
+  findGovOfficerByCode,
   findGovOfficerByEmail,
   getGovCredential,
   isGovAccountLocked,
+  normalizeGovEmail,
   recordGovLoginFailure,
   resetGovLoginFailures,
   verifyGovPassword,
   type GovCredentialRow,
   type GovOfficerRow,
 } from "./govCredentials";
+import { normalizeGovOfficerCode } from "./govOfficerCode";
 import { createGovSession, toGovOfficerContext, type GovSessionRow } from "./govSession";
 
 /** The ONLY login failure message surfaced for any credential/status cause. */
@@ -57,6 +60,7 @@ export async function govDummyCompare(): Promise<boolean> {
 
 export interface GovLoginStore {
   findOfficerByEmail(email: string): Promise<GovOfficerRow | null>;
+  findOfficerByCode(code: string): Promise<GovOfficerRow | null>;
   getCredential(officerId: string): Promise<GovCredentialRow | null>;
   verifyPassword(plain: string, hash: string): Promise<boolean>;
   dummyCompare(): Promise<void>;
@@ -67,6 +71,7 @@ export interface GovLoginStore {
 
 export const productionGovLoginStore: GovLoginStore = {
   findOfficerByEmail: (email) => findGovOfficerByEmail(email),
+  findOfficerByCode: (code) => findGovOfficerByCode(code),
   getCredential: (officerId) => getGovCredential(officerId),
   verifyPassword: (plain, hash) => verifyGovPassword(plain, hash),
   dummyCompare: () => govDummyCompare().then(() => undefined),
@@ -80,19 +85,35 @@ export type GovLoginResult =
   | { ok: false; message: typeof GOV_LOGIN_FAILED_MESSAGE };
 
 /**
- * Attempt a government login. Every failure path returns the identical
- * generic message; success returns the raw session token (set it into the
- * __Secure-gov-session cookie via govCookie helpers) plus a secret-free
- * officer context. Never logs or returns passwords, hashes, or tokens.
+ * Login identifier routing (pure). An input containing `@` is treated as
+ * an email address; anything else is treated as an Officer ID and
+ * normalized toward canonical form. Routing happens before any existence
+ * check and reveals nothing about stored accounts.
  */
-export async function attemptGovLogin(
-  email: string,
+export type GovLoginIdentifier =
+  | { kind: "email"; value: string }
+  | { kind: "code"; value: string };
+
+export function resolveGovLoginIdentifier(input: string): GovLoginIdentifier {
+  const trimmed = input.trim();
+  if (trimmed.includes("@")) {
+    return { kind: "email", value: normalizeGovEmail(trimmed) };
+  }
+  return { kind: "code", value: normalizeGovOfficerCode(trimmed) };
+}
+
+/**
+ * Shared password stage for a resolved officer row: status gate,
+ * lockout gate, bcrypt verify, failure accounting, session issue.
+ * Every failure returns the identical generic message.
+ */
+async function completeGovPasswordStage(
+  officer: GovOfficerRow | null,
   password: string,
-  store: GovLoginStore = productionGovLoginStore,
+  store: GovLoginStore,
 ): Promise<GovLoginResult> {
   const fail = (): GovLoginResult => ({ ok: false, message: GOV_LOGIN_FAILED_MESSAGE });
 
-  const officer = await store.findOfficerByEmail(email);
   if (officer === null) {
     await store.dummyCompare();
     return fail();
@@ -112,4 +133,36 @@ export async function attemptGovLogin(
   await store.resetFailures(officer.id);
   const { token, session } = await store.issueSession(officer);
   return { ok: true, token, officer: toGovOfficerContext(officer), session };
+}
+
+/**
+ * Attempt a government login with an email address (legacy identifier).
+ * Every failure path returns the identical generic message.
+ */
+export async function attemptGovLogin(
+  email: string,
+  password: string,
+  store: GovLoginStore = productionGovLoginStore,
+): Promise<GovLoginResult> {
+  const officer = await store.findOfficerByEmail(email);
+  return completeGovPasswordStage(officer, password, store);
+}
+
+/**
+ * Attempt a government login with either identifier: Officer ID
+ * (e.g. `DL-CYB-0001`, primary) or official email (fallback). Both paths
+ * share the same timing-equalized generic failure, so the identifier kind
+ * leaks nothing about which accounts exist.
+ */
+export async function attemptGovIdentifierLogin(
+  identifier: string,
+  password: string,
+  store: GovLoginStore = productionGovLoginStore,
+): Promise<GovLoginResult> {
+  const resolved = resolveGovLoginIdentifier(identifier);
+  const officer =
+    resolved.kind === "email"
+      ? await store.findOfficerByEmail(resolved.value)
+      : await store.findOfficerByCode(resolved.value);
+  return completeGovPasswordStage(officer, password, store);
 }

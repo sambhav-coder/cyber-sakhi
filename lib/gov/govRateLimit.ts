@@ -79,3 +79,19 @@ export class GovRateLimiter {
  * scripted guessing well below the durable 5-failure account lockout.
  */
 export const govLoginRateLimiter = new GovRateLimiter(15 * 60_000, 30);
+
+/**
+ * MFA throttle: 10 code attempts per officer per 15 minutes. Bounds
+ * online TOTP/recovery guessing against the 6-digit (10^6) and recovery
+ * spaces independently of the IP throttle, so a distributed attack gains
+ * nothing. The temporary password-authenticated session is revoked when
+ * the budget is exhausted.
+ */
+export const govMfaRateLimiter = new GovRateLimiter(15 * 60_000, 10);
+
+/**
+ * Recovery + enrollment throttle: 10 requests per IP per 15 minutes.
+ * Keeps forgot-password, forgot-ID, and enrollment endpoints from being
+ * abused for enumeration or delivery spam.
+ */
+export const govRecoveryRateLimiter = new GovRateLimiter(15 * 60_000, 10);

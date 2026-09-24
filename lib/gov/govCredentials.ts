@@ -14,6 +14,7 @@
 import bcrypt from "bcryptjs";
 import { getSupabaseServer } from "@/lib/supabaseServer";
 import { isUniqueViolation, throwIfError } from "@/lib/db/errors";
+import { normalizeGovOfficerCode } from "./govOfficerCode";
 import type {
   GovOfficerStatus,
   GovRole,
@@ -112,6 +113,28 @@ export async function findGovOfficerByEmail(
     .from("gov_officers")
     .select("*")
     .eq("official_email", normalizeGovEmail(email))
+    .maybeSingle();
+
+  if (error && error.code === "PGRST116") return null;
+  throwIfError(error, "Failed to look up government officer.");
+  return (data as GovOfficerRow | null) ?? null;
+}
+
+/**
+ * Find an officer by Officer ID (`officer_code`). The input is normalized
+ * toward canonical form first; the match is case-insensitive so legacy
+ * codes issued before the canonical format keep working. Returns null for
+ * unknown codes — callers must surface the single generic login failure.
+ */
+export async function findGovOfficerByCode(
+  code: string,
+): Promise<GovOfficerRow | null> {
+  const normalized = normalizeGovOfficerCode(code);
+  if (!normalized) return null;
+  const { data, error } = await getSupabaseServer()
+    .from("gov_officers")
+    .select("*")
+    .ilike("officer_code", normalized)
     .maybeSingle();
 
   if (error && error.code === "PGRST116") return null;

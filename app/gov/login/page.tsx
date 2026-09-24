@@ -18,7 +18,6 @@ export const dynamic = "force-dynamic";
 export interface GovRosterOfficer {
   officer_code: string;
   full_name: string;
-  official_email: string;
   role: string;
   department: string | null;
   scope: string;
@@ -28,10 +27,12 @@ export interface GovRosterOfficer {
 
 async function loadRoster(): Promise<GovRosterOfficer[]> {
   try {
+    // Officer codes only: official emails are never exposed to
+    // unauthenticated visitors.
     const { data, error } = await getSupabaseServer()
       .from("gov_officers")
       .select(
-        "officer_code, full_name, official_email, role, department, scope, state_code, district_code",
+        "officer_code, full_name, role, department, scope, state_code, district_code",
       )
       .eq("status", "ACTIVE")
       .order("officer_code", { ascending: true });

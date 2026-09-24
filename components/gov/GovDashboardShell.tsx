@@ -14,6 +14,7 @@ import {
   ScrollText,
   Settings2,
   Activity,
+  KeyRound,
   Menu,
   X,
   Shield,
@@ -42,6 +43,10 @@ export interface GovDashboardShellProps {
     };
     mfaFresh: boolean;
   };
+  /** Page-specific content rendered in place of the default overview cards. */
+  children?: React.ReactNode;
+  /** Active nav label for pages that render custom content. */
+  activeLabel?: string;
 }
 
 interface NavItem {
@@ -79,6 +84,7 @@ const NAV_SECTIONS: NavSection[] = [
       { href: "/gov/trends", icon: Activity, label: "Trends", permission: "analytics.view" },
       { href: "/gov/reports", icon: FileBarChart2, label: "Reports", permission: "report.generate" },
       { href: "/gov/audit", icon: ScrollText, label: "Audit Logs", permission: "audit.view" },
+      { href: "/gov/mfa", icon: KeyRound, label: "Authenticator (MFA)", permission: null },
       { href: "#", icon: Settings2, label: "Administration", permission: "officer.view" },
     ],
   },
@@ -91,10 +97,10 @@ const SCOPE_LABELS: Record<string, string> = {
   ASSIGNED_CASES: "Assigned cases",
 };
 
-export const GovDashboardShell: React.FC<GovDashboardShellProps> = ({ context }) => {
+export const GovDashboardShell: React.FC<GovDashboardShellProps> = ({ context, children, activeLabel }) => {
   const router = useRouter();
   const [sidebarOpen, setSidebarOpen] = useState(false);
-  const [activeItem, setActiveItem] = useState("Overview");
+  const [activeItem, setActiveItem] = useState(activeLabel ?? "Overview");
   const { officer, mfaFresh } = context;
 
   const scopeLabel = SCOPE_LABELS[officer.scope] ?? officer.scope;
@@ -277,6 +283,8 @@ export const GovDashboardShell: React.FC<GovDashboardShellProps> = ({ context })
               <span className="gov-tag w-fit">{mfaFresh ? "MFA fresh" : "MFA not verified"}</span>
             </section>
 
+            {children ?? (
+              <>
             {/* What is live now */}
             <section aria-label="Console status" className="grid gap-4 md:grid-cols-2">
               {[
@@ -305,6 +313,8 @@ export const GovDashboardShell: React.FC<GovDashboardShellProps> = ({ context })
             <p className="pt-2 pb-4 text-center font-mono text-[11px] text-slate-600">
               Cyber-Sakhi Government Console — access is role-scoped and audited.
             </p>
+              </>
+            )}
           </div>
         </main>
       </div>

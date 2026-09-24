@@ -326,6 +326,7 @@ describe("government login", () => {
     const calls = { failures: 0, resets: 0 };
     const store: GovLoginStore = {
       findOfficerByEmail: () => Promise.resolve(officer),
+      findOfficerByCode: () => Promise.resolve(officer),
       getCredential: () =>
         Promise.resolve(officer ? credentialRow({ officer_id: officer.id }) : null),
       verifyPassword: (plain) => Promise.resolve(plain === password),

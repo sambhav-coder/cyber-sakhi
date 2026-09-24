@@ -27,7 +27,7 @@ export function encryptGovTotpSecret(secret: string): string {
   return Buffer.concat([iv, cipher.getAuthTag(), body]).toString("base64");
 }
 
-function decryptGovTotpSecret(ciphertext: string): string | null {
+export function decryptGovTotpSecret(ciphertext: string): string | null {
   const key = encryptionKey();
   if (!key) return null;
   try {
@@ -56,6 +56,9 @@ export function verifyTotpCode(secret: string, code: string, nowMs = Date.now())
   if (!key) return false;
   for (const offset of [-1, 0, 1]) {
     const counter = Math.floor(nowMs / 30_000) + offset;
+    // Times before the first full step would underflow the unsigned
+    // 64-bit counter; skip instead of throwing (fail-closed per offset).
+    if (counter < 0) continue;
     const bytes = Buffer.alloc(8); bytes.writeBigUInt64BE(BigInt(counter));
     const digest = crypto.createHmac("sha1", key).update(bytes).digest();
     const index = digest[digest.length - 1] & 15;

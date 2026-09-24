@@ -1,15 +1,15 @@
 import { NextResponse } from "next/server";
 import crypto from "node:crypto";
-import { attemptGovLogin, GOV_LOGIN_FAILED_MESSAGE } from "@/lib/gov/govAuth";
+import { attemptGovIdentifierLogin, GOV_LOGIN_FAILED_MESSAGE } from "@/lib/gov/govAuth";
 import { govSessionCookieAttributes } from "@/lib/gov/govCookie";
-import { normalizeGovEmail } from "@/lib/gov/govCredentials";
 import {
   getClientIp,
   getUserAgent,
   govJsonError,
   isCrossOriginRequest,
 } from "@/lib/gov/govHttp";
-import { govLoginRateLimiter } from "@/lib/gov/govRateLimit";
+import { govLoginRateLimiter, govMfaRateLimiter } from "@/lib/gov/govRateLimit";
+import { GOV_RECOVERY_CODE_PATTERN, verifyGovOfficerRecoveryCode } from "@/lib/gov/govMfaEnrollment";
 import { getSupabaseServer } from "@/lib/supabaseServer";
 import {
   buildGovAuditEvent,
@@ -66,19 +66,29 @@ export async function POST(req: Request): Promise<NextResponse> {
     return govJsonError(400, "BAD_REQUEST", "Invalid request body.");
   }
 
-  const { email, password, mfaCode } = (body ?? {}) as {
+  const { email, identifier, password, mfaCode } = (body ?? {}) as {
     email?: unknown;
+    identifier?: unknown;
     password?: unknown;
     mfaCode?: unknown;
   };
-  if (typeof email !== "string" || typeof password !== "string") {
-    return govJsonError(400, "BAD_REQUEST", "Email and password are required.");
+  // Officer ID is the primary identifier; official email remains accepted
+  // as a fallback. Both resolve to the same officer with identical
+  // generic failures, so the identifier kind leaks nothing.
+  const rawIdentifier =
+    typeof identifier === "string" && identifier.trim().length > 0
+      ? identifier
+      : typeof email === "string"
+        ? email
+        : "";
+  if (typeof password !== "string" || rawIdentifier.trim().length === 0) {
+    return govJsonError(400, "BAD_REQUEST", "Officer ID and password are required.");
   }
 
-  const normalizedEmail = normalizeGovEmail(email);
+  const trimmedIdentifier = rawIdentifier.trim();
   if (
-    normalizedEmail.length === 0 ||
-    normalizedEmail.length > MAX_EMAIL_LENGTH ||
+    trimmedIdentifier.length === 0 ||
+    trimmedIdentifier.length > MAX_EMAIL_LENGTH ||
     password.length < MIN_PASSWORD_LENGTH ||
     password.length > MAX_PASSWORD_LENGTH
   ) {
@@ -90,7 +100,7 @@ export async function POST(req: Request): Promise<NextResponse> {
   const meta = { ip, userAgent: getUserAgent(req) };
   const unknownActor: GovAuditActor = { kind: "unknown", detail: "login_attempt" };
 
-  const result = await attemptGovLogin(normalizedEmail, password);
+  const result = await attemptGovIdentifierLogin(trimmedIdentifier, password);
 
   if (!result.ok) {
     // auth.login_failed is mandatory; a visible audit failure must surface
@@ -116,14 +126,61 @@ export async function POST(req: Request): Promise<NextResponse> {
   }
 
   // A password-only session is never returned to the browser. The temporary
-  // server-side session is revoked on any failed TOTP check.
-  const otp = typeof mfaCode === "string" ? mfaCode.trim() : "";
-  const mfaValid = await verifyGovOfficerTotp(result.officer.officerId, otp);
-  if (!mfaValid) {
+  // server-side session is revoked on any failed second-factor check.
+  // Second factor is either a 6-digit TOTP code or a single-use recovery
+  // code (both verified server-side; frontend input shape is untrusted).
+  const mfaKey = `mfa:officer:${result.officer.officerId}`;
+  const mfaRate = govMfaRateLimiter.check(mfaKey);
+  if (!mfaRate.allowed) {
+    await revokeGovSession(result.session.id, result.officer.officerId, "mfa_rate_limited").catch(() => {});
+    const event = buildGovAuditEvent({ action: "auth.login_failed", actor: unknownActor, result: "deny", denialReason: "mfa_rate_limited", correlationId, remoteIp: meta.ip, userAgent: meta.userAgent });
+    if (event) await persistGovAuditEvent(event, { swallow: true });
+    const response = govJsonError(429, "RATE_LIMITED", "Too many attempts. Try again later.");
+    if (mfaRate.retryAfterMs !== null) {
+      response.headers.set("Retry-After", String(Math.ceil(mfaRate.retryAfterMs / 1000)));
+    }
+    return response;
+  }
+  const secondFactor = typeof mfaCode === "string" ? mfaCode.trim() : "";
+  const isRecoveryShaped = GOV_RECOVERY_CODE_PATTERN.test(
+    secondFactor.toUpperCase().replace(/[\s_]+/g, "-"),
+  );
+  let mfaOk = false;
+  let viaRecovery = false;
+  if (isRecoveryShaped) {
+    viaRecovery = true;
+    mfaOk = await verifyGovOfficerRecoveryCode(result.officer.officerId, secondFactor);
+  } else {
+    mfaOk = await verifyGovOfficerTotp(result.officer.officerId, secondFactor);
+  }
+  if (!mfaOk) {
     await revokeGovSession(result.session.id, result.officer.officerId, "mfa_failed").catch(() => {});
-    const event = buildGovAuditEvent({ action: "auth.login_failed", actor: unknownActor, result: "deny", denialReason: "mfa_failed", correlationId, remoteIp: meta.ip, userAgent: meta.userAgent });
+    const event = buildGovAuditEvent({
+      action: viaRecovery ? "mfa.recovery_failed" : "auth.login_failed",
+      actor: unknownActor,
+      result: "deny",
+      denialReason: viaRecovery ? "recovery_failed" : "mfa_failed",
+      correlationId,
+      remoteIp: meta.ip,
+      userAgent: meta.userAgent,
+    });
     if (event) await persistGovAuditEvent(event, { swallow: true });
     return govJsonError(401, "INVALID_CREDENTIALS", GOV_LOGIN_FAILED_MESSAGE);
+  }
+  if (viaRecovery) {
+    // Recovery-code use is a security-relevant event of its own; logged
+    // best-effort alongside the mandatory login-success event below.
+    const actor: GovAuditActor = {
+      kind: "gov_officer",
+      officerId: result.officer.officerId,
+      officerCode: result.officer.officerCode,
+      role: result.officer.role,
+      scope: result.officer.scope,
+      stateCode: result.officer.stateCode,
+      districtCode: result.officer.districtCode,
+    };
+    const event = buildGovAuditEvent({ action: "mfa.recovery_used", actor, result: "allow", correlationId, remoteIp: meta.ip, userAgent: meta.userAgent });
+    if (event) await persistGovAuditEvent(event, { swallow: true });
   }
   try { await completeGovSessionTotp(result.session.id); } catch {
     await revokeGovSession(result.session.id, result.officer.officerId, "mfa_completion_failed").catch(() => {});
@@ -172,6 +229,7 @@ export async function POST(req: Request): Promise<NextResponse> {
   // Successful login resets the IP throttle's accumulated failures so a
   // legitimate officer behind a shared NAT is not blocked after success.
   govLoginRateLimiter.reset(`login:ip:${ip ?? "unknown"}`);
+  govMfaRateLimiter.reset(`mfa:officer:${result.officer.officerId}`);
 
   const response = NextResponse.json({
     authenticated: true,

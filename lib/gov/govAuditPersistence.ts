@@ -48,6 +48,7 @@ export function govAuditEntityForAction(action: GovAuditAction): GovAuditEntity 
   if (action.startsWith("assignment.")) return "gov_assignment";
   if (action.startsWith("grant.")) return "gov_grant";
   if (action.startsWith("auth.")) return "gov_auth";
+  if (action.startsWith("mfa.")) return "gov_auth";
   if (action.startsWith("session.")) return "gov_session";
   if (action.startsWith("case.") || action.startsWith("pii.")) return "gov_case";
   if (action.startsWith("evidence.")) return "gov_evidence";
