@@ -1,6 +1,6 @@
 "use client";
 
-import React, { useState } from "react";
+import React, { useState, useEffect } from "react";
 import Link from "next/link";
 import { useRouter } from "next/navigation";
 import {
@@ -80,7 +80,7 @@ const NAV_SECTIONS: NavSection[] = [
   {
     label: "Accountability",
     items: [
-      { href: "#", icon: Fingerprint, label: "Evidence & Chain of Custody", permission: "evidence.view" },
+      { href: "/gov/evidence", icon: Fingerprint, label: "Evidence & Chain of Custody", permission: "evidence.view" },
       { href: "/gov/trends", icon: Activity, label: "Trends", permission: "analytics.view" },
       { href: "/gov/reports", icon: FileBarChart2, label: "Reports", permission: "report.generate" },
       { href: "/gov/audit", icon: ScrollText, label: "Audit Logs", permission: "audit.view" },
@@ -99,9 +99,22 @@ const SCOPE_LABELS: Record<string, string> = {
 
 export const GovDashboardShell: React.FC<GovDashboardShellProps> = ({ context, children, activeLabel }) => {
   const router = useRouter();
-  const [sidebarOpen, setSidebarOpen] = useState(false);
+  const [sidebarOpen, setSidebarOpen] = useState(true); // Start open on desktop
   const [activeItem, setActiveItem] = useState(activeLabel ?? "Overview");
   const { officer, mfaFresh } = context;
+
+  // Update active item based on current path
+  useEffect(() => {
+    const path = window.location.pathname;
+    const navItem = NAV_SECTIONS.flatMap(section => section.items).find(item => item.href === path);
+    if (navItem) {
+      setActiveItem(navItem.label);
+    }
+  }, []);
+
+  const toggleSidebar = () => {
+    setSidebarOpen(!sidebarOpen);
+  };
 
   const scopeLabel = SCOPE_LABELS[officer.scope] ?? officer.scope;
   const scopeDetail =
@@ -168,8 +181,8 @@ export const GovDashboardShell: React.FC<GovDashboardShellProps> = ({ context, c
       {/* Sidebar */}
       <aside
         className={clsx(
-          "fixed inset-y-0 left-0 z-40 w-72 transform border-r border-slate-800/70 bg-[#060b16]/95 backdrop-blur transition-transform duration-200 lg:static lg:translate-x-0",
-          sidebarOpen ? "translate-x-0" : "-translate-x-full"
+          "fixed inset-y-0 left-0 z-40 w-72 transform border-r border-slate-800/70 bg-[#060b16]/95 backdrop-blur transition-all duration-200 lg:static",
+          sidebarOpen ? "translate-x-0" : "-translate-x-full lg:translate-x-0 lg:w-0 lg:overflow-hidden lg:border-0"
         )}
       >
         <div className="flex h-full flex-col">
@@ -183,14 +196,24 @@ export const GovDashboardShell: React.FC<GovDashboardShellProps> = ({ context, c
                 </span>
               </div>
             </div>
-            <button
-              type="button"
-              onClick={() => setSidebarOpen(false)}
-              className="rounded-lg p-1.5 text-slate-400 hover:bg-slate-800 hover:text-white lg:hidden"
-              aria-label="Close sidebar"
-            >
-              <X className="h-5 w-5" />
-            </button>
+            <div className="flex items-center gap-2">
+              <button
+                type="button"
+                onClick={toggleSidebar}
+                className="hidden rounded-lg p-1.5 text-slate-400 hover:bg-slate-800 hover:text-white lg:block"
+                aria-label={sidebarOpen ? "Collapse sidebar" : "Expand sidebar"}
+              >
+                {sidebarOpen ? <X className="h-5 w-5" /> : <Menu className="h-5 w-5" />}
+              </button>
+              <button
+                type="button"
+                onClick={() => setSidebarOpen(false)}
+                className="rounded-lg p-1.5 text-slate-400 hover:bg-slate-800 hover:text-white lg:hidden"
+                aria-label="Close sidebar"
+              >
+                <X className="h-5 w-5" />
+              </button>
+            </div>
           </div>
 
           <nav className="flex-1 space-y-6 overflow-y-auto px-3 py-5" aria-label="Government console sections">
@@ -264,9 +287,22 @@ export const GovDashboardShell: React.FC<GovDashboardShellProps> = ({ context, c
           </div>
         </header>
 
-        <main className="flex-1 px-5 py-6 sm:px-8">
+        <main className="flex-1 px-5 py-6 sm:px-8 relative">
+          {/* Bottom Open Sidebar Button */}
+          {!sidebarOpen && (
+            <button
+              type="button"
+              onClick={toggleSidebar}
+              className="fixed bottom-6 left-6 z-50 flex items-center gap-2 rounded-lg border border-slate-700/60 bg-slate-900/90 px-4 py-3 text-sm font-semibold text-slate-200 shadow-lg backdrop-blur transition hover:border-teal-400/40 hover:text-teal-300 focus:outline-none focus:ring-2 focus:ring-teal-500 focus:ring-offset-2 focus:ring-offset-slate-900 lg:bottom-8 lg:left-8"
+              aria-label="Open sidebar"
+            >
+              <Menu className="h-5 w-5" />
+              Open Sidebar
+            </button>
+          )}
+
           <div className="mx-auto w-full max-w-5xl space-y-6">
-            {/* Session summary */}
+            {/* Session summary - always visible */}
             <section aria-label="Session and jurisdiction" className="gov-panel flex flex-col gap-4 p-5 sm:flex-row sm:items-center sm:justify-between">
               <div className="flex items-center gap-4">
                 <div className="flex h-12 w-12 shrink-0 items-center justify-center rounded-xl border border-teal-400/30 bg-teal-400/10 text-teal-300">
@@ -285,34 +321,34 @@ export const GovDashboardShell: React.FC<GovDashboardShellProps> = ({ context, c
 
             {children ?? (
               <>
-            {/* What is live now */}
-            <section aria-label="Console status" className="grid gap-4 md:grid-cols-2">
-              {[
-                {
-                  title: "Authentication & Auditing",
-                  body: "Session validation, role-based authorization, and a write-audit trail are enforced server-side on this console. Every protected request is session-gated and denials are recorded.",
-                },
-                {
-                  title: "Data modules",
-                  body: "Case explorer, evidence, indicators, geography, reports, and audit review arrive in the data phases. Navigation above shows only sections your role may open.",
-                },
-              ].map((card) => (
-                <article
-                  key={card.title}
-                  className="flex flex-col gap-3 rounded-2xl border border-dashed border-slate-700/60 bg-slate-900/30 p-5"
-                >
-                  <div className="flex items-center justify-between">
-                    <h3 className="text-sm font-bold text-slate-100">{card.title}</h3>
-                    <Shield className="h-4 w-4 text-teal-400/70" />
-                  </div>
-                  <p className="text-sm leading-relaxed text-slate-500">{card.body}</p>
-                </article>
-              ))}
-            </section>
+                {/* What is live now */}
+                <section aria-label="Console status" className="grid gap-4 md:grid-cols-2">
+                  {[
+                    {
+                      title: "Authentication & Auditing",
+                      body: "Session validation, role-based authorization, and a write-audit trail are enforced server-side on this console. Every protected request is session-gated and denials are recorded.",
+                    },
+                    {
+                      title: "Data modules",
+                      body: "Case explorer, evidence, indicators, geography, reports, and audit review arrive in the data phases. Navigation above shows only sections your role may open.",
+                    },
+                  ].map((card) => (
+                    <article
+                      key={card.title}
+                      className="flex flex-col gap-3 rounded-2xl border border-dashed border-slate-700/60 bg-slate-900/30 p-5"
+                    >
+                      <div className="flex items-center justify-between">
+                        <h3 className="text-sm font-bold text-slate-100">{card.title}</h3>
+                        <Shield className="h-4 w-4 text-teal-400/70" />
+                      </div>
+                      <p className="text-sm leading-relaxed text-slate-500">{card.body}</p>
+                    </article>
+                  ))}
+                </section>
 
-            <p className="pt-2 pb-4 text-center font-mono text-[11px] text-slate-600">
-              Cyber-Sakhi Government Console — access is role-scoped and audited.
-            </p>
+                <p className="pt-2 pb-4 text-center font-mono text-[11px] text-slate-600">
+                  Cyber-Sakhi Government Console — access is role-scoped and audited.
+                </p>
               </>
             )}
           </div>

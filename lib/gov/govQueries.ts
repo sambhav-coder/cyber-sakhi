@@ -15,6 +15,15 @@
 
 import { getSupabaseServer } from "@/lib/supabaseServer";
 import { throwIfError } from "@/lib/db/errors";
+import { isGovThreatCategory, mapLegacyThreatCategory } from "./govThreatCategories";
+import {
+  GOV_UNLOCATED_LABEL,
+  classifyGovJurisdiction,
+  normalizeGovDistrict,
+  normalizeGovLocality,
+  normalizeGovStateCode,
+  normalizeGovSubDivision,
+} from "./govJurisdictions";
 import type { GovOfficerRow } from "./govCredentials";
 import {
   createGovAssignment,
@@ -773,6 +782,33 @@ export async function govUpdateCaseTriage(
   caseId: string,
   patch: GovCaseTriagePatch,
 ): Promise<Record<string, unknown> | null> {
+  const dbPatch = buildGovTriagePatch(patch);
+
+  const { data, error } = await getSupabaseServer()
+    .from("cases")
+    .update(dbPatch)
+    .eq("id", caseId)
+    .select("id,case_number,gov_status,risk_level,severity,threat_category")
+    .single();
+  throwIfError(error, "Failed to update case.");
+  return data as Record<string, unknown> | null;
+}
+
+/**
+ * Pure triage-patch builder: field validation without I/O, so every
+ * acceptance/rejection rule is unit-testable without a database.
+ * Validation order and error messages match the historical inline
+ * behavior exactly; authorization, scope, and audit all happen in the
+ * route layer and are untouched.
+ *
+ * threat_category policy (Phase 1 catalogue): strict canonical match —
+ * empty input clears the field to null (historical behavior), any other
+ * non-canonical value is rejected. Historical rows are never rewritten
+ * here; only new writes are constrained.
+ */
+export function buildGovTriagePatch(
+  patch: GovCaseTriagePatch,
+): Record<string, unknown> {
   const dbPatch: Record<string, unknown> = {};
   if (patch.govStatus !== undefined) {
     if (!GOV_STATUSES.has(patch.govStatus)) throw new Error("Invalid gov_status.");
@@ -783,17 +819,18 @@ export async function govUpdateCaseTriage(
     dbPatch.risk_level = patch.riskLevel || null;
   }
   if (patch.severity !== undefined) dbPatch.severity = patch.severity || null;
-  if (patch.threatCategory !== undefined) dbPatch.threat_category = patch.threatCategory || null;
+  if (patch.threatCategory !== undefined) {
+    const trimmed = patch.threatCategory.trim();
+    if (trimmed.length === 0) {
+      dbPatch.threat_category = null;
+    } else if (!isGovThreatCategory(trimmed)) {
+      throw new Error("Invalid threat_category. Use a canonical category: PHISHING, FINANCIAL_FRAUD, BLACKMAIL, THREAT, or OTHER.");
+    } else {
+      dbPatch.threat_category = trimmed;
+    }
+  }
   if (Object.keys(dbPatch).length === 0) throw new Error("Nothing to update.");
-
-  const { data, error } = await getSupabaseServer()
-    .from("cases")
-    .update(dbPatch)
-    .eq("id", caseId)
-    .select("id,case_number,gov_status,risk_level,severity,threat_category")
-    .single();
-  throwIfError(error, "Failed to update case.");
-  return data as Record<string, unknown> | null;
+  return dbPatch;
 }
 
 export interface GovAssignInput {
@@ -1024,11 +1061,32 @@ export interface GovGeoSummary {
   level: "india" | "state" | "district" | "locality";
   from: string | null;
   to: string | null;
-  rows: Array<{ code: string; label: string; metric: GovGeoMetric }>;
+  rows: Array<{
+    code: string;
+    label: string;
+    metric: GovGeoMetric;
+    /**
+     * Per-region canonical threat-category breakdown (aggregate counts
+     * only, no case identifiers). Additive: existing consumers read
+     * code/label/metric and ignore this field.
+     */
+    categories: Array<{ label: string; count: number }>;
+  }>;
   total: GovGeoMetric;
   threatBreakdown?: Array<{ label: string; count: number }>;
   riskBreakdown?: Array<{ label: string; count: number }>;
   cases?: GovCaseView[];
+  /** ISO timestamp of aggregation; every aggregate response carries one. */
+  generatedAt: string;
+  /** Truthful source label: internal case records, never official data. */
+  source: "Cyber Sakhi case data";
+  /** Verification status: officer-entered values, never officially verified. */
+  verification: "Officer-entered, unverified";
+  /**
+   * Records counted out of located regions: unlocated (both missing) vs
+   * invalid-or-incomplete (malformed or single-sided jurisdiction).
+   */
+  excludedCounts: { unlocated: number; invalidOrIncomplete: number };
 }
 
 function new7dAgo(): string {
@@ -1043,9 +1101,29 @@ export async function govGeoSummary(opts: {
   to?: string | null;
   casesLimit?: number;
 }): Promise<GovGeoSummary> {
+  // Aggregation placement (deliberate): officer scope, assignment, and
+  // time filters are applied server-side to the Supabase query BEFORE any
+  // grouping, but grouping itself stays in JavaScript over the scoped rows.
+  // The Supabase JS client exposes no GROUP BY, and introducing raw SQL or
+  // an RPC just for counts would bypass the shared applyGovScopeFilter
+  // path and risk an unscoped aggregate endpoint. Totals count every
+  // scoped case once (open, closed, and resolved included; nothing is
+  // archived/deleted out of the cases table by this query).
   if (isScopeEmpty(opts.scope)) {
     const empty: GovGeoMetric = { cases: 0, new7d: 0, highRisk: 0, open: 0 };
-    return { state: opts.state, district: opts.district, level: "india", from: opts.from ?? null, to: opts.to ?? null, rows: [], total: empty };
+    return {
+      state: opts.state,
+      district: opts.district,
+      level: "india",
+      from: opts.from ?? null,
+      to: opts.to ?? null,
+      rows: [],
+      total: empty,
+      generatedAt: new Date().toISOString(),
+      source: "Cyber Sakhi case data",
+      verification: "Officer-entered, unverified",
+      excludedCounts: { unlocated: 0, invalidOrIncomplete: 0 },
+    };
   }
 
   const groupField =
@@ -1075,18 +1153,64 @@ export async function govGeoSummary(opts: {
     locality: string | null;
   }>;
 
+  /**
+   * Read-path jurisdiction normalization (Phase 2A helper, additive).
+   * Scope filtering already happened server-side above; this only makes
+   * grouping deterministic: state codes collapse case-insensitively to
+   * their shape-valid form, free-text levels trim/collapse whitespace.
+   * Anything missing, malformed, or overlong groups under "UNKNOWN"
+   * (displayed as "Not located") and is counted in excludedCounts —
+   * never silently mapped to a real region, never used to filter rows.
+   */
+  function normalizedGroupKey(row: (typeof rowsVec)[number]): string {
+    if (groupField === "state_code") {
+      const n = normalizeGovStateCode(row.state_code);
+      return n.valid && n.value ? n.value : "UNKNOWN";
+    }
+    if (groupField === "district_code") {
+      const n = normalizeGovDistrict(row.district_code);
+      return n.valid && n.value ? n.value : "UNKNOWN";
+    }
+    const sub = normalizeGovSubDivision(row.sub_division);
+    if (sub.valid && sub.value) return sub.value;
+    const loc = normalizeGovLocality(row.locality);
+    if (loc.valid && loc.value) return loc.value;
+    return "UNKNOWN";
+  }
+
   const map = new Map<string, GovGeoMetric>();
+  const perRegionCategories = new Map<string, Map<string, number>>();
   const totals: GovGeoMetric = { cases: 0, new7d: 0, highRisk: 0, open: 0 };
+  let unlocated = 0;
+  let invalidOrIncomplete = 0;
   const cutoff = new7dAgo();
   for (const row of rowsVec) {
-    const rawKey = row[groupField] as string | null;
-    const key = groupField === "sub_division" && !rawKey ? row.locality : rawKey;
-    const metric = map.get((key ?? "") || "UNKNOWN") ?? { cases: 0, new7d: 0, highRisk: 0, open: 0 };
+    const key = normalizedGroupKey(row);
+    const metric = map.get(key) ?? { cases: 0, new7d: 0, highRisk: 0, open: 0 };
     metric.cases += 1;
     if (row.created_at >= cutoff) metric.new7d += 1;
     if (row.risk_level === "HIGH" || row.risk_level === "CRITICAL") metric.highRisk += 1;
     if (row.gov_status !== "RESOLVED" && row.gov_status !== "CLOSED") metric.open += 1;
-    map.set((key ?? "") || "UNKNOWN", metric);
+    map.set(key, metric);
+
+    // Per-region canonical category counts: one increment per case, so
+    // category counts always sum to the region total (no double counting).
+    // Read-time mapping is case/whitespace tolerant; write-path validation
+    // stays strict elsewhere.
+    const cat = mapLegacyThreatCategory(row.threat_category).category;
+    const catMap = perRegionCategories.get(key) ?? new Map<string, number>();
+    catMap.set(cat, (catMap.get(cat) ?? 0) + 1);
+    perRegionCategories.set(key, catMap);
+
+    // Excluded-count diagnostics from the raw jurisdiction pair. Stored
+    // rows are never rewritten; this only labels what the grouping above
+    // already treated as unlocated.
+    const jurisdiction = classifyGovJurisdiction({
+      state: row.state_code,
+      district: row.district_code,
+    });
+    if (jurisdiction.status === "UNLOCATED") unlocated += 1;
+    else if (jurisdiction.status !== "LOCATED") invalidOrIncomplete += 1;
 
     totals.cases += 1;
     if (row.created_at >= cutoff) totals.new7d += 1;
@@ -1095,7 +1219,14 @@ export async function govGeoSummary(opts: {
   }
 
   const rows = [...map.entries()]
-    .map(([code, metric]) => ({ code, label: code === "UNKNOWN" ? "Not located" : code, metric }))
+    .map(([code, metric]) => ({
+      code,
+      label: code === "UNKNOWN" ? GOV_UNLOCATED_LABEL : code,
+      metric,
+      categories: [...(perRegionCategories.get(code) ?? new Map<string, number>()).entries()]
+        .map(([label, count]) => ({ label, count }))
+        .sort((a, b) => b.count - a.count),
+    }))
     .sort((a, b) => b.metric.cases - a.metric.cases);
 
   let threatBreakdown: Array<{ label: string; count: number }> | undefined;
@@ -1106,7 +1237,11 @@ export async function govGeoSummary(opts: {
     const tc = new Map<string, number>();
     const rc = new Map<string, number>();
     for (const row of rowsVec) {
-      const t = row.threat_category ?? "Other";
+      // Canonical read-time mapping: case/whitespace tolerant, legacy
+      // aliases resolved explicitly, everything else folds to OTHER with
+      // matched:false. One increment per case — counts always sum to the
+      // scoped total.
+      const t = mapLegacyThreatCategory(row.threat_category).category;
       tc.set(t, (tc.get(t) ?? 0) + 1);
       const r = row.risk_level ?? "Unset";
       rc.set(r, (rc.get(r) ?? 0) + 1);
@@ -1157,6 +1292,10 @@ export async function govGeoSummary(opts: {
     threatBreakdown,
     riskBreakdown,
     cases,
+    generatedAt: new Date().toISOString(),
+    source: "Cyber Sakhi case data",
+    verification: "Officer-entered, unverified",
+    excludedCounts: { unlocated, invalidOrIncomplete },
   };
 }
 
@@ -1483,7 +1622,8 @@ export async function govDashboardMetrics(
     if (row.gov_status === "UNDER_INVESTIGATION") metrics.underInvestigation += 1;
     if (row.gov_status === "RESOLVED") metrics.resolved += 1;
     if (row.gov_status !== "RESOLVED" && row.gov_status !== "CLOSED") metrics.open += 1;
-    const t = row.threat_category ?? "Other";
+    // Canonical read-time category mapping (one increment per case).
+    const t = mapLegacyThreatCategory(row.threat_category).category;
     tc.set(t, (tc.get(t) ?? 0) + 1);
     const r = row.risk_level ?? "Unset";
     rc.set(r, (rc.get(r) ?? 0) + 1);
@@ -1655,8 +1795,14 @@ export async function govTrends(
     casesOverTime,
     byStatus: groupOf(inCurrent, (r) => govStatusLabel(r.gov_status)),
     byRisk: groupOf(inCurrent, (r) => r.risk_level ?? "Unset"),
-    byThreat: groupOf(inCurrent, (r) => r.threat_category ?? "Other"),
-    byState: groupOf(inCurrent, (r) => r.state_code ?? "Unknown"),
+    // Canonical threat mapping + normalized state labels: lowercase and
+    // surrounding-whitespace variants of the same code aggregate together
+    // instead of fragmenting. Shape-valid codes stay unverified here.
+    byThreat: groupOf(inCurrent, (r) => mapLegacyThreatCategory(r.threat_category).category),
+    byState: groupOf(inCurrent, (r) => {
+      const n = normalizeGovStateCode(r.state_code);
+      return n.valid && n.value ? n.value : "Unknown";
+    }),
     indicatorRecurrence,
     totals: {
       total: inCurrent.length,

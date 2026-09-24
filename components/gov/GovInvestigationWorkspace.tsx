@@ -1,17 +1,312 @@
 "use client";
 import { useCallback, useEffect, useState } from "react";
+import { GovEvidenceView } from "./GovEvidenceView";
 
-type Detail = { caseNumber: string; govStatus: string; riskLevel: string | null; threatCategory: string | null; createdAt: string; stateCode: string | null; districtCode: string | null; incidentChannel: string | null; evidenceCount: number; victimSummary: { name: string | null; phoneMasked: string | null; age: string | null } | null; investigations: Array<{ id: string; subject: string | null; sender: string | null; verdict: string | null; riskScore: number | null; analysisSummary: { authentication?: { spf?: string; dkim?: string; dmarc?: string }; senderDomain?: string | null; originatingIP?: string | null; smtpHops: number; indicatorsCount: number } }>; indicators: Array<{ id: string; type: string; value: string; confidence: number | null }>; notes: Array<{ id: string; content: string; createdAt: string }>; timeline: Array<{ at: string; label: string; detail: string | null; actor: string | null }>; };
+type Detail = {
+  caseNumber: string;
+  govStatus: string;
+  riskLevel: string | null;
+  threatCategory: string | null;
+  createdAt: string;
+  stateCode: string | null;
+  districtCode: string | null;
+  incidentChannel: string | null;
+  evidenceCount: number;
+  victimSummary: {
+    name: string | null;
+    phoneMasked: string | null;
+    age: string | null;
+  } | null;
+  investigations: Array<{
+    id: string;
+    subject: string | null;
+    sender: string | null;
+    verdict: string | null;
+    riskScore: number | null;
+    analysisSummary: {
+      authentication?: {
+        spf?: string;
+        dkim?: string;
+        dmarc?: string;
+      };
+      senderDomain?: string | null;
+      originatingIP?: string | null;
+      smtpHops: number;
+      indicatorsCount: number;
+    };
+  }>;
+  indicators: Array<{
+    id: string;
+    type: string;
+    value: string;
+    confidence: number | null;
+  }>;
+  notes: Array<{
+    id: string;
+    content: string;
+    createdAt: string;
+  }>;
+  timeline: Array<{
+    at: string;
+    label: string;
+    detail: string | null;
+    actor: string | null;
+  }>;
+};
 
 export function GovInvestigationWorkspace({ caseId }: { caseId: string }) {
-  const [detail, setDetail] = useState<Detail | null>(null); const [error, setError] = useState<string | null>(null); const [showPii, setShowPii] = useState(false); const [pii, setPii] = useState<Record<string, string | null> | null>(null); const [purpose, setPurpose] = useState(""); const [note, setNote] = useState("");
-  const [locations, setLocations] = useState<Array<{ id: string; latitude: number; longitude: number; accuracy_m: number | null; source: string; captured_at: string; created_at: string }> | null>(null);
-  const load = useCallback(async () => { const r = await fetch(`/gov/api/cases/${caseId}`, { cache: "no-store" }); if (!r.ok) throw new Error(r.status === 404 ? "Case not found or not in your scope." : `Unable to load case (${r.status}).`); setDetail(await r.json()); }, [caseId]);
-  useEffect(() => { void load().catch(e => setError(e.message)); }, [load]);
-  const revealPii = async () => { if (purpose.trim().length < 4) { setError("Enter an investigation purpose or ticket before revealing victim information."); return; } const r = await fetch(`/gov/api/cases/${caseId}/victim?purpose=${encodeURIComponent(purpose.trim())}`, { cache: "no-store" }); if (!r.ok) { setError("Victim information could not be revealed. Check your permission, scope, and purpose."); return; } setPii(await r.json()); setShowPii(true); };
-  const revealLocations = async () => { if (purpose.trim().length < 4) { setError("Enter an investigation purpose or ticket before revealing live-location data."); return; } const r = await fetch(`/gov/api/cases/${caseId}/location?purpose=${encodeURIComponent(purpose.trim())}`, { cache: "no-store" }); if (!r.ok) { setError(r.status === 422 ? "Enter an investigation purpose or ticket before revealing live-location data." : "Live-location data could not be revealed. Check your permission, scope, and purpose."); return; } const body = await r.json(); setLocations(Array.isArray(body.locations) ? body.locations : []); };
- const addNote = async () => { if (!note.trim()) return; const r = await fetch(`/gov/api/cases/${caseId}/notes`, { method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify({ content: note }) }); if (!r.ok) { setError("Unable to add investigation note."); return; } setNote(""); await load(); };
- if (error) return <section className="gov-panel p-6 text-rose-300">{error}</section>; if (!detail) return <section className="gov-panel p-6 text-slate-400">Loading scoped investigation…</section>;
- const a = detail.investigations[0]?.analysisSummary;
- return <div className="space-y-5"><section className="gov-panel p-5"><div className="flex flex-wrap items-start justify-between gap-3"><div><p className="font-mono text-xs text-teal-300">{detail.caseNumber}</p><h2 className="text-xl font-bold text-slate-100">Investigation Workspace</h2><p className="mt-1 text-sm text-slate-400">{detail.stateCode ?? "Unlocated"} / {detail.districtCode ?? "—"} · {detail.threatCategory ?? "Unclassified"}</p></div><div className="rounded-lg border border-slate-700 px-3 py-2 text-sm text-slate-300">{detail.govStatus} · {detail.riskLevel ?? "Risk unset"}</div></div></section><div className="grid gap-5 lg:grid-cols-2"><section className="gov-panel p-5"><h3 className="font-bold text-slate-100">Victim information</h3><p className="mt-1 text-sm text-slate-500">Hidden by default. Access requires permission, scope, and a logged investigation purpose.</p>{!showPii ? <div className="mt-3 space-y-2"><label className="block text-xs font-semibold text-slate-300">Purpose or ticket<input value={purpose} onChange={e => { setPurpose(e.target.value); setError(null); }} maxLength={500} minLength={4} placeholder="e.g. FIR-2026-123 evidence review" className="mt-1 block w-full rounded border border-slate-700 bg-slate-950 p-2 text-sm text-slate-100"/></label><button onClick={revealPii} className="rounded bg-teal-500 px-3 py-2 text-sm font-bold text-slate-950">Reveal authorized information</button></div> : <dl className="mt-3 space-y-1 text-sm text-slate-300"><div>Name: {pii?.name ?? "Not submitted"}</div><div>Phone: {pii?.phone ?? "Not submitted"}</div><div>Email: {pii?.email ?? "Not submitted"}</div><div>Sakhi number: {pii?.sakhiNumber ?? "Not submitted"}</div></dl>}</section><section className="gov-panel p-5"><h3 className="font-bold text-slate-100">Live locations</h3><p className="mt-1 text-sm text-slate-500">User-consented one-time GPS captures for this case. Exact coordinates require permission, scope, and a logged investigation purpose.</p>{locations === null ? <div className="mt-3"><button onClick={revealLocations} className="rounded bg-teal-500 px-3 py-2 text-sm font-bold text-slate-950">Reveal authorized locations</button></div> : locations.length === 0 ? <p className="mt-3 text-sm text-slate-400">No saved locations for this case.</p> : <ul className="mt-3 space-y-2 text-sm text-slate-300">{locations.map(l => <li key={l.id} className="rounded border border-slate-700 p-2 font-mono text-xs"><span>{Number(l.latitude).toFixed(5)}, {Number(l.longitude).toFixed(5)}</span><span className="ml-3 text-slate-400">±{l.accuracy_m ?? "?"} m</span><span className="ml-3 text-slate-400">{new Date(l.captured_at).toLocaleString()}</span><a className="ml-3 text-teal-300 underline" target="_blank" rel="noreferrer" href={`https://maps.google.com/?q=${l.latitude},${l.longitude}`}>Map</a></li>)}</ul>}</section><section className="gov-panel p-5"><h3 className="font-bold text-slate-100">Forensic findings</h3>{a ? <dl className="mt-3 space-y-1 text-sm text-slate-300"><div>Sender: {detail.investigations[0]?.sender ?? "—"}</div><div>Domain: {a.senderDomain ?? "—"}</div><div>Origin IP: {a.originatingIP ?? "—"}</div><div>SPF / DKIM / DMARC: {a.authentication?.spf ?? "—"} / {a.authentication?.dkim ?? "—"} / {a.authentication?.dmarc ?? "—"}</div><div>SMTP hops: {a.smtpHops}; indicators: {a.indicatorsCount}</div></dl> : <p className="mt-3 text-sm text-slate-500">No forensic analysis is associated with this case.</p>}</section></div><section className="gov-panel p-5"><h3 className="font-bold text-slate-100">Evidence and chain of custody</h3><p className="mt-1 text-sm text-slate-400">{detail.evidenceCount} evidence item(s). Integrity, custody records, and blockchain verification are available through the protected evidence endpoint.</p></section><section className="gov-panel p-5"><h3 className="font-bold text-slate-100">Investigation notes</h3><div className="mt-3 flex gap-2"><textarea value={note} onChange={e => setNote(e.target.value)} maxLength={4000} placeholder="Add an attributed investigation note" className="min-h-20 flex-1 rounded border border-slate-700 bg-slate-950 p-2 text-sm text-slate-100"/><button onClick={addNote} className="h-fit rounded bg-teal-500 px-3 py-2 text-sm font-bold text-slate-950">Add note</button></div><ul className="mt-4 space-y-2 text-sm text-slate-300">{detail.notes.map(n => <li key={n.id} className="rounded border border-slate-800 p-2"><span className="text-xs text-slate-500">{new Date(n.createdAt).toLocaleString("en-IN")}</span><br/>{n.content}</li>)}</ul></section><section className="gov-panel p-5"><h3 className="font-bold text-slate-100">Case timeline</h3><ol className="mt-3 space-y-2 text-sm text-slate-300">{detail.timeline.map((event, i) => <li key={`${event.at}-${i}`}><span className="text-xs text-slate-500">{new Date(event.at).toLocaleString("en-IN")}</span> · {event.label}{event.detail ? ` — ${event.detail}` : ""}</li>)}</ol></section></div>;
+  const [detail, setDetail] = useState<Detail | null>(null);
+  const [error, setError] = useState<string | null>(null);
+  const [showPii, setShowPii] = useState(false);
+  const [pii, setPii] = useState<Record<string, string | null> | null>(null);
+  const [purpose, setPurpose] = useState("");
+  const [note, setNote] = useState("");
+  const [locations, setLocations] = useState<Array<{
+    id: string;
+    latitude: number;
+    longitude: number;
+    accuracy_m: number | null;
+    source: string;
+    captured_at: string;
+    created_at: string;
+  }> | null>(null);
+
+  const load = useCallback(async () => {
+    const r = await fetch(`/gov/api/cases/${caseId}`, { cache: "no-store" });
+    if (!r.ok) {
+      throw new Error(
+        r.status === 404
+          ? "Case not found or not in your scope."
+          : `Unable to load case (${r.status}).`
+      );
+    }
+    setDetail(await r.json());
+  }, [caseId]);
+
+  useEffect(() => {
+    void load().catch((e) => setError(e.message));
+  }, [load]);
+
+  const revealPii = async () => {
+    if (purpose.trim().length < 4) {
+      setError("Enter an investigation purpose or ticket before revealing victim information.");
+      return;
+    }
+    const r = await fetch(
+      `/gov/api/cases/${caseId}/victim?purpose=${encodeURIComponent(purpose.trim())}`,
+      { cache: "no-store" }
+    );
+    if (!r.ok) {
+      setError("Victim information could not be revealed. Check your permission, scope, and purpose.");
+      return;
+    }
+    setPii(await r.json());
+    setShowPii(true);
+  };
+
+  const revealLocations = async () => {
+    if (purpose.trim().length < 4) {
+      setError("Enter an investigation purpose or ticket before revealing live-location data.");
+      return;
+    }
+    const r = await fetch(
+      `/gov/api/cases/${caseId}/location?purpose=${encodeURIComponent(purpose.trim())}`,
+      { cache: "no-store" }
+    );
+    if (!r.ok) {
+      setError(
+        r.status === 422
+          ? "Enter an investigation purpose or ticket before revealing live-location data."
+          : "Live-location data could not be revealed. Check your permission, scope, and purpose."
+      );
+      return;
+    }
+    const body = await r.json();
+    setLocations(Array.isArray(body.locations) ? body.locations : []);
+  };
+
+  const addNote = async () => {
+    if (!note.trim()) return;
+    const r = await fetch(`/gov/api/cases/${caseId}/notes`, {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ content: note }),
+    });
+    if (!r.ok) {
+      setError("Unable to add investigation note.");
+      return;
+    }
+    setNote("");
+    await load();
+  };
+
+  if (error) return <section className="gov-panel p-6 text-rose-300">{error}</section>;
+  if (!detail) return <section className="gov-panel p-6 text-slate-400">Loading scoped investigation…</section>;
+
+  const a = detail.investigations[0]?.analysisSummary;
+
+  return (
+    <div className="space-y-5">
+      <section className="gov-panel p-5">
+        <div className="flex flex-wrap items-start justify-between gap-3">
+          <div>
+            <p className="font-mono text-xs text-teal-300">{detail.caseNumber}</p>
+            <h2 className="text-xl font-bold text-slate-100">Investigation Workspace</h2>
+            <p className="mt-1 text-sm text-slate-400">
+              {detail.stateCode ?? "Unlocated"} / {detail.districtCode ?? "—"} ·{" "}
+              {detail.threatCategory ?? "Unclassified"}
+            </p>
+          </div>
+          <div className="rounded-lg border border-slate-700 px-3 py-2 text-sm text-slate-300">
+            {detail.govStatus} · {detail.riskLevel ?? "Risk unset"}
+          </div>
+        </div>
+      </section>
+
+      <div className="grid gap-5 lg:grid-cols-2">
+        <section className="gov-panel p-5">
+          <h3 className="font-bold text-slate-100">Victim information</h3>
+          <p className="mt-1 text-sm text-slate-500">
+            Hidden by default. Access requires permission, scope, and a logged investigation purpose.
+          </p>
+          {!showPii ? (
+            <div className="mt-3 space-y-2">
+              <label className="block text-xs font-semibold text-slate-300">
+                Purpose or ticket
+                <input
+                  value={purpose}
+                  onChange={(e) => {
+                    setPurpose(e.target.value);
+                    setError(null);
+                  }}
+                  maxLength={500}
+                  minLength={4}
+                  placeholder="e.g. FIR-2026-123 evidence review"
+                  className="mt-1 block w-full rounded border border-slate-700 bg-slate-950 p-2 text-sm text-slate-100"
+                />
+              </label>
+              <button
+                onClick={revealPii}
+                className="rounded bg-teal-500 px-3 py-2 text-sm font-bold text-slate-950"
+              >
+                Reveal authorized information
+              </button>
+            </div>
+          ) : (
+            <dl className="mt-3 space-y-1 text-sm text-slate-300">
+              <div>Name: {pii?.name ?? "Not submitted"}</div>
+              <div>Phone: {pii?.phone ?? "Not submitted"}</div>
+              <div>Email: {pii?.email ?? "Not submitted"}</div>
+              <div>Sakhi number: {pii?.sakhiNumber ?? "Not submitted"}</div>
+            </dl>
+          )}
+        </section>
+
+        <section className="gov-panel p-5">
+          <h3 className="font-bold text-slate-100">Live locations</h3>
+          <p className="mt-1 text-sm text-slate-500">
+            User-consented one-time GPS captures for this case. Exact coordinates require permission,
+            scope, and a logged investigation purpose.
+          </p>
+          {locations === null ? (
+            <div className="mt-3">
+              <button
+                onClick={revealLocations}
+                className="rounded bg-teal-500 px-3 py-2 text-sm font-bold text-slate-950"
+              >
+                Reveal authorized locations
+              </button>
+            </div>
+          ) : locations.length === 0 ? (
+            <p className="mt-3 text-sm text-slate-400">No saved locations for this case.</p>
+          ) : (
+            <ul className="mt-3 space-y-2 text-sm text-slate-300">
+              {locations.map((l) => (
+                <li key={l.id} className="rounded border border-slate-700 p-2 font-mono text-xs">
+                  <span>
+                    {Number(l.latitude).toFixed(5)}, {Number(l.longitude).toFixed(5)}
+                  </span>
+                  <span className="ml-3 text-slate-400">±{l.accuracy_m ?? "?"} m</span>
+                  <span className="ml-3 text-slate-400">{new Date(l.captured_at).toLocaleString()}</span>
+                  <a
+                    className="ml-3 text-teal-300 underline"
+                    target="_blank"
+                    rel="noreferrer"
+                    href={`https://maps.google.com/?q=${l.latitude},${l.longitude}`}
+                  >
+                    Map
+                  </a>
+                </li>
+              ))}
+            </ul>
+          )}
+        </section>
+
+        <section className="gov-panel p-5">
+          <h3 className="font-bold text-slate-100">Forensic findings</h3>
+          {a ? (
+            <dl className="mt-3 space-y-1 text-sm text-slate-300">
+              <div>Sender: {detail.investigations[0]?.sender ?? "—"}</div>
+              <div>Domain: {a.senderDomain ?? "—"}</div>
+              <div>Origin IP: {a.originatingIP ?? "—"}</div>
+              <div>
+                SPF / DKIM / DMARC: {a.authentication?.spf ?? "—"} / {a.authentication?.dkim ?? "—"} /{" "}
+                {a.authentication?.dmarc ?? "—"}
+              </div>
+              <div>
+                SMTP hops: {a.smtpHops}; indicators: {a.indicatorsCount}
+              </div>
+            </dl>
+          ) : (
+            <p className="mt-3 text-sm text-slate-500">
+              No forensic analysis is associated with this case.
+            </p>
+          )}
+        </section>
+      </div>
+
+      <GovEvidenceView caseId={caseId} />
+
+      <section className="gov-panel p-5">
+        <h3 className="font-bold text-slate-100">Investigation notes</h3>
+        <div className="mt-3 flex gap-2">
+          <textarea
+            value={note}
+            onChange={(e) => setNote(e.target.value)}
+            maxLength={4000}
+            placeholder="Add an attributed investigation note"
+            className="min-h-20 flex-1 rounded border border-slate-700 bg-slate-950 p-2 text-sm text-slate-100"
+          />
+          <button
+            onClick={addNote}
+            className="h-fit rounded bg-teal-500 px-3 py-2 text-sm font-bold text-slate-950"
+          >
+            Add note
+          </button>
+        </div>
+        <ul className="mt-4 space-y-2 text-sm text-slate-300">
+          {detail.notes.map((n) => (
+            <li key={n.id} className="rounded border border-slate-800 p-2">
+              <span className="text-xs text-slate-500">{new Date(n.createdAt).toLocaleString("en-IN")}</span>
+              <br />
+              {n.content}
+            </li>
+          ))}
+        </ul>
+      </section>
+
+      <section className="gov-panel p-5">
+        <h3 className="font-bold text-slate-100">Case timeline</h3>
+        <ol className="mt-3 space-y-2 text-sm text-slate-300">
+          {detail.timeline.map((event, i) => (
+            <li key={`${event.at}-${i}`}>
+              <span className="text-xs text-slate-500">{new Date(event.at).toLocaleString("en-IN")}</span> ·{" "}
+              {event.label}
+              {event.detail ? ` — ${event.detail}` : ""}
+            </li>
+          ))}
+        </ol>
+      </section>
+    </div>
+  );
 }
