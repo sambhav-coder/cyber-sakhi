@@ -41,7 +41,7 @@ export function GovGeographyView() {
   const [error, setError] = useState<string | null>(null);
   const load = useCallback(async () => {
     setError(null); const p = new URLSearchParams(); if (state) p.set("state", state); if (district) p.set("district", district);
-    const response = await fetch(`/api/gov/geo?${p}`, { cache: "no-store" });
+    const response = await fetch(`/gov/api/geo?${p}`, { cache: "no-store" });
     if (!response.ok) throw new Error(`Unable to load geographic intelligence (${response.status}).`);
     setData(await response.json());
   }, [state, district]);

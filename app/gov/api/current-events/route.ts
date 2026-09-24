@@ -8,7 +8,7 @@ import {
 export const dynamic = "force-dynamic";
 
 /**
- * GET /api/gov/current-events
+ * GET /gov/api/current-events
  *
  * Server-side aggregator for current cyber-awareness activities and official
  * updates. Sources:

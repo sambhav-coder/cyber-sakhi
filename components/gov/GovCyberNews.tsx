@@ -45,7 +45,7 @@ function relativeUpdatedAt(iso: string | undefined): string | null {
 /**
  * Cyber Safety News for the Government Portal.
  *
- * - Live data from /api/gov/cyber-news (CyberDost I4C videos when the
+ * - Live data from /gov/api/cyber-news (CyberDost I4C videos when the
  *   YOUTUBE_API_KEY is set, plus verified cyber-safety RSS news as fallback).
  * - Gentle auto-scroll paused by any hover, focus, wheel or pointer
  *   interaction; reduced-motion users get a native scrollbar and no movement.
@@ -74,7 +74,7 @@ export const GovCyberNews: React.FC<GovCyberNewsProps> = ({ onNewsClick }) => {
     let cancelled = false;
     const fetchNews = async () => {
       try {
-        const response = await fetch("/api/gov/cyber-news");
+        const response = await fetch("/gov/api/cyber-news");
         const data = (await response.json()) as ApiPayload;
         if (cancelled) return;
         if (data.news) {

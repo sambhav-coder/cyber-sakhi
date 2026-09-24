@@ -45,7 +45,7 @@ function relativeUpdatedAt(iso: string | undefined): string | null {
 /**
  * Current Events for the Government Portal.
  *
- * - Live data from /api/gov/current-events (I4C advisories, I4C/PIB press
+ * - Live data from /gov/api/current-events (I4C advisories, I4C/PIB press
  *   releases, I4C awareness programmes).
  * - Gentle auto-scroll paused by any hover, focus, wheel or pointer interaction;
  *   reduced-motion users get a native scrollbar and no auto movement.
@@ -74,7 +74,7 @@ export const GovCurrentEvents: React.FC<GovCurrentEventsProps> = ({ onEventClick
     let cancelled = false;
     const fetchEvents = async () => {
       try {
-        const response = await fetch("/api/gov/current-events");
+        const response = await fetch("/gov/api/current-events");
         const data = (await response.json()) as ApiPayload;
         if (cancelled) return;
         if (data.events) {

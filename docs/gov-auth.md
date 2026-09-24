@@ -142,6 +142,19 @@ kills sessions), then re-provision MFA.
 | POST | `/gov/api/recovery/forgot-id` | throttle | Generic reply |
 | POST | `/gov/api/recovery/forgot-password` | throttle | Generic reply, token prepared |
 | POST | `/gov/api/recovery/reset-password` | throttle | `{token,newPassword}` → rotate + logout-all |
+| GET | `/gov/api/dashboard`, `/gov/api/dashboard/filters` | `case.view_meta` | Scoped metrics + filter options |
+| GET | `/gov/api/cases`, `/gov/api/queue`, `/gov/api/trends`, `/gov/api/geo`, `/gov/api/indicators` | per-route permission | Scoped explorer, queue, analytics, geography, indicator search |
+| GET/PATCH | `/gov/api/cases/[caseId]` | `case.view` / `case.update` + scope | Detail + triage update |
+| GET/POST | `/gov/api/cases/[caseId]/{assignment,notes}` | `case.assign` / `case.note` | Assignment + notes |
+| GET | `/gov/api/cases/[caseId]/{victim,location}` | `case.view_pii` + purpose + mandatory audit | PII + live locations |
+| GET | `/gov/api/cases/[caseId]/evidence`, `/gov/api/evidence/[evidenceId]` | `evidence.list` / `evidence.view` | Evidence metadata |
+| GET | `/gov/api/reports` (+POST export) | `report.generate` / `report.export` + ledger | Datasets + CSV/PDF export |
+| GET | `/gov/api/audit` | `audit.view` | Audit log query |
+| GET | `/gov/api/current-events`, `/gov/api/cyber-news` | none (public feeds) | I4C / news aggregation |
+
+> Consolidation note: data routes previously lived under `/api/gov/*`, which
+> browsers could not call with the `Path=/gov` session cookie. They now live
+> under `/gov/api/*`; the old paths were removed (no shims, no rewrites).
 
 ## 8. Verification
 

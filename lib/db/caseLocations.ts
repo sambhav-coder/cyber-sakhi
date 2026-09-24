@@ -128,7 +128,7 @@ export async function listCaseLocationsForUser(
 /**
  * Government read path: NO owner check here by design. Callers MUST enforce
  * requireScopedCase + case.view_pii + purpose + mandatory audit (see
- * app/api/gov/cases/[caseId]/location/route.ts). Exposed fields are the
+ * app/gov/api/cases/[caseId]/location/route.ts). Exposed fields are the
  * minimum necessary: coordinates, accuracy, source, timestamps, actor id.
  */
 export async function listCaseLocationsForGov(caseId: string): Promise<CaseLocationRow[]> {

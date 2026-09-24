@@ -8,7 +8,7 @@ import {
 export const dynamic = "force-dynamic";
 
 /**
- * GET /api/gov/cyber-news
+ * GET /gov/api/cyber-news
  *
  * Server-side aggregator for cyber-safety news and YouTube-backed items.
  * Sources:
