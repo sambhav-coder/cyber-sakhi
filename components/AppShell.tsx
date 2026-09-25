@@ -8,7 +8,7 @@ import {
   Menu,
   LogOut,
   ShieldAlert,
-  AlertTriangle,
+  MapPin,
   User,
   ChevronDown,
   KeyRound,
@@ -34,7 +34,6 @@ const GOV_PORTAL_PREFIX = "/gov";
 
 const TopBar: React.FC<{ onOpenSidebar: () => void; sidebarCollapsed: boolean }> = ({
   onOpenSidebar,
-  sidebarCollapsed,
 }) => {
   const { data: session, status } = useSession();
   const [isUserMenuOpen, setIsUserMenuOpen] = useState(false);
@@ -108,22 +107,23 @@ const TopBar: React.FC<{ onOpenSidebar: () => void; sidebarCollapsed: boolean }>
         <button
           type="button"
           onClick={() => setIsSosOpen(true)}
-          className={cn(
-            "relative inline-flex items-center justify-center gap-1.5 rounded-xl px-3 sm:px-4 py-2 text-white text-xs font-bold transition-all",
-            sidebarCollapsed ? "" : ""
-          )}
-          style={{
-            background:
-              "linear-gradient(135deg, #b91c1c 0%, #ef4444 50%, #dc2626 100%)",
-            boxShadow:
-              "0 12px 32px -12px rgba(220, 38, 38, 0.85), inset 0 1px 0 rgba(255,255,255,0.18)",
-            clipPath:
-              "polygon(0 0, 100% 0, 100% calc(100% - 6px), calc(100% - 6px) 100%, 0 100%)",
-          }}
-          title="Live Location (one-time GPS capture)"
+          className="group relative inline-flex items-center gap-2 h-10 w-10 sm:w-auto justify-center sm:pl-3 sm:pr-3.5 rounded-xl border border-white/[0.08] bg-white/[0.03] text-[13px] font-medium text-slate-200 transition-colors hover:border-red-500/40 hover:bg-red-500/[0.08] hover:text-white focus:outline-none focus-visible:ring-2 focus-visible:ring-red-500/60"
+          title="Share live location (one-time GPS capture)"
+          aria-label="Share live location"
         >
-          <AlertTriangle className="w-4 h-4 animate-pulse" />
-          <span className="hidden sm:inline tracking-[0.06em]">LIVE LOCATION</span>
+          <MapPin
+            className="w-4 h-4 text-red-400 transition-colors group-hover:text-red-300"
+            strokeWidth={2.25}
+            aria-hidden="true"
+          />
+          <span className="hidden sm:inline">Share location</span>
+          <span
+            className="absolute top-2 right-2 sm:static flex h-1.5 w-1.5"
+            aria-hidden="true"
+          >
+            <span className="absolute inline-flex h-full w-full rounded-full bg-red-500 opacity-60 animate-ping motion-reduce:animate-none" />
+            <span className="relative inline-flex h-1.5 w-1.5 rounded-full bg-red-500" />
+          </span>
         </button>
 
         {/* User avatar + dropdown (only if authenticated) */}
