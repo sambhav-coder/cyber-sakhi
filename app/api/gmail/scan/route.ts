@@ -10,7 +10,7 @@ import {
   refreshGmailAccessToken,
   GmailTokenPayload,
 } from "@/lib/gmailApi";
-import { decodeGmailRaw } from "@/lib/gmailDecoder";
+import { rebuildEmailFromFull, type GmailPart } from "@/lib/gmailDecoder";
 import { analyzeEmail } from "@/lib/emailForensics";
 
 /* ------------------------------------------------------------------ *
@@ -35,12 +35,6 @@ const GMAIL_ID = /^[A-Za-z0-9_-]{1,64}$/;
 
 type Severity = "SAFE" | "LOW" | "MEDIUM" | "HIGH" | "CRITICAL";
 
-interface GmailPart {
-  mimeType?: string;
-  body?: { data?: string };
-  parts?: GmailPart[];
-}
-
 interface ScanResult {
   id: string;
   level?: Severity;
@@ -64,36 +58,6 @@ async function mapLimit<T, R>(
   });
   await Promise.all(workers);
   return out;
-}
-
-function safeDecode(data?: string): string {
-  if (!data) return "";
-  try {
-    return decodeGmailRaw(data);
-  } catch {
-    return "";
-  }
-}
-
-/** Walks the MIME tree collecting text parts. Attachments carry no inline
- *  data in format=full, so they are never downloaded. */
-function collectText(part: GmailPart | undefined, plain: string[], html: string[]) {
-  if (!part) return;
-  const type = (part.mimeType || "").toLowerCase();
-  if (type === "text/plain") plain.push(safeDecode(part.body?.data));
-  else if (type === "text/html") html.push(safeDecode(part.body?.data));
-  for (const child of part.parts || []) collectText(child, plain, html);
-}
-
-function stripHtml(html: string): string {
-  return html
-    .replace(/<(script|style)[\s\S]*?<\/\1>/gi, " ")
-    .replace(/<br\s*\/?>/gi, "\n")
-    .replace(/<[^>]+>/g, " ")
-    .replace(/&nbsp;/gi, " ")
-    .replace(/&amp;/gi, "&")
-    .replace(/[ \t]+/g, " ")
-    .trim();
 }
 
 /** The most useful single line for a tooltip: a warning, not a pass. */
@@ -161,19 +125,10 @@ export async function POST(req: NextRequest) {
           if (!res.ok) return { id, error: `Gmail returned ${res.status}` };
 
           const msg = await res.json();
-          const headers = ((msg.payload?.headers || []) as { name: string; value: string }[])
-            .map((h) => `${h.name}: ${h.value}`)
-            .join("\r\n");
-
-          const plain: string[] = [];
-          const html: string[] = [];
-          collectText(msg.payload as GmailPart, plain, html);
-          const text = (plain.join("\n").trim() || stripHtml(html.join("\n")))
-            .slice(0, MAX_BODY_CHARS);
-
-          const analysis = await analyzeEmail(`${headers}\r\n\r\n${text}`, {
-            offline: true,
-          });
+          const analysis = await analyzeEmail(
+            rebuildEmailFromFull(msg.payload as GmailPart, MAX_BODY_CHARS),
+            { offline: true }
+          );
 
           return {
             id,

@@ -40,7 +40,7 @@ From: HDFC Bank Security Alert <security@hdfc-alerts.com>
 Reply-To: collect-your-refund@totally-not-phishing.top
 Return-Path: <bounce@attacker-phish.xyz>
 To: victim@example.com
-Subject: [URGENT] Your HDFC NetBanking is suspended â€” Verify KYC within 24 hours
+Subject: [URGENT] Your HDFC NetBanking is suspended — Verify KYC within 24 hours
 Date: Mon, 01 Sep 2026 10:15:00 +0530
 Message-ID: <xyz.1234567890@hdfc-alerts.com>
 
@@ -233,13 +233,13 @@ SMTP Path:
 - Hops: ${result.smtpPath.length}
 
 Key Findings:
-${result.findings.map(f => `â€¢ ${f}`).join("\n")}
+${result.findings.map(f => `• ${f}`).join("\n")}
 
 Recommendations:
-${result.recommendations.map(r => `â€¢ ${r}`).join("\n")}
+${result.recommendations.map(r => `• ${r}`).join("\n")}
 
 Extracted Indicators: ${result.indicators.length}
-${result.indicators.map(i => `â€¢ ${i.type}: ${i.value}${i.malicious ? " (SUSPICIOUS)" : ""}`).join("\n")}
+${result.indicators.map(i => `• ${i.type}: ${i.value}${i.malicious ? " (SUSPICIOUS)" : ""}`).join("\n")}
       `.trim();
 
       // Compute SHA-256 hash of the analysis result
@@ -280,7 +280,7 @@ ${result.indicators.map(i => `â€¢ ${i.type}: ${i.value}${i.malicious ? " (SU
 
       // Best-effort server-side link so this evidence lands in the secure
       // vault (optionally attached to the case created during this
-      // investigation). A failure here is non-fatal â€” the local vault copy
+      // investigation). A failure here is non-fatal — the local vault copy
       // is already saved, and the vault itself always shows the honest state.
       try {
         await fetch("/api/evidence", {
@@ -457,7 +457,7 @@ ${result.indicators.map(i => `â€¢ ${i.type}: ${i.value}${i.malicious ? " (SU
                   </span>
                 </div>
                 <p className="mx-auto mt-5 max-w-2xl text-sm font-light leading-relaxed tracking-wide text-slate-200 sm:text-base">
-                  Cyber Sakhi&apos;s forensic engine investigates suspicious email â€” authentication
+                  Cyber Sakhi&apos;s forensic engine investigates suspicious email — authentication
                   checks, sender-spoofing analysis, SMTP path tracing, and threat-indicator
                   extraction.
                 </p>
@@ -472,7 +472,7 @@ ${result.indicators.map(i => `â€¢ ${i.type}: ${i.value}${i.malicious ? " (SU
           {/* ================= ENTRY OPTIONS ================= */}
           <div className="relative z-10 mx-auto mt-10 max-w-4xl px-4 pb-2 sm:mt-14 sm:px-6">
             <div className="grid grid-cols-1 gap-5 md:grid-cols-2">
-              {/* OPTION 01 â€” Paste Raw Email */}
+              {/* OPTION 01 — Paste Raw Email */}
               <div
                 className={`transition-all duration-700 ease-out ${
                   mounted ? "opacity-100 translate-y-0" : "opacity-0 translate-y-5"
@@ -507,7 +507,7 @@ ${result.indicators.map(i => `â€¢ ${i.type}: ${i.value}${i.malicious ? " (SU
                     Have an email? Paste here
                   </h2>
                   <p className="mt-2 text-[13px] leading-relaxed text-slate-400">
-                    Paste the full raw email source â€” headers and body â€” and run the forensic analysis
+                    Paste the full raw email source — headers and body — and run the forensic analysis
                     engine on it. Works with Gmail, Outlook, Apple Mail, and ProtonMail exports.
                   </p>
 
@@ -519,7 +519,7 @@ ${result.indicators.map(i => `â€¢ ${i.type}: ${i.value}${i.malicious ? " (SU
                 </button>
               </div>
 
-              {/* OPTION 02 â€” Connect Gmail */}
+              {/* OPTION 02 — Connect Gmail */}
               <div
                 className={`transition-all duration-700 ease-out ${
                   mounted ? "opacity-100 translate-y-0" : "opacity-0 translate-y-5"
@@ -555,7 +555,7 @@ ${result.indicators.map(i => `â€¢ ${i.type}: ${i.value}${i.malicious ? " (SU
                   </h2>
                   <p className="mt-2 text-[13px] leading-relaxed text-slate-400">
                     Securely connect Gmail with read-only access and investigate real suspicious
-                    messages from your inbox â€” no copying, no exports, point and investigate.
+                    messages from your inbox — no copying, no exports, point and investigate.
                   </p>
 
                   <span className="btn-emergency mt-auto w-full pt-3 pb-3 text-xs">
@@ -578,7 +578,7 @@ ${result.indicators.map(i => `â€¢ ${i.type}: ${i.value}${i.malicious ? " (SU
         </>
       ) : showPasteMode ? (
         <>
-          {/* CINEMATIC PASTE HERO â€” same forensic atmosphere as the landing screen */}
+          {/* CINEMATIC PASTE HERO — same forensic atmosphere as the landing screen */}
           <section className="relative overflow-hidden pt-4 sm:pt-6">
             <div aria-hidden className="pointer-events-none absolute inset-0 -z-10">
               <div
@@ -653,7 +653,7 @@ ${result.indicators.map(i => `â€¢ ${i.type}: ${i.value}${i.malicious ? " (SU
                   </span>
                 </div>
                 <p className="mt-4 max-w-2xl text-sm font-light leading-relaxed tracking-wide text-slate-200 sm:text-base">
-                  Paste the full raw email source â€” headers and body â€” and run Cyber Sakhi&apos;s
+                  Paste the full raw email source — headers and body — and run Cyber Sakhi&apos;s
                   forensic engine on it. Supports Gmail, Outlook, Apple Mail, and ProtonMail exports.
                 </p>
                 <p className="mt-2 max-w-2xl text-xs leading-relaxed text-slate-400">
@@ -722,7 +722,7 @@ ${result.indicators.map(i => `â€¢ ${i.type}: ${i.value}${i.malicious ? " (SU
                         ? new Date(result.headers.date).toLocaleString()
                         : "N/A"}
                     </span>
-                    <span className="text-slate-600">Â·</span>
+                    <span className="text-slate-600">·</span>
                     <span className="text-slate-500 font-semibold">ANALYZED</span>
                     <span className="font-mono text-slate-300">
                       {result.analyzedAt
@@ -770,7 +770,7 @@ ${result.indicators.map(i => `â€¢ ${i.type}: ${i.value}${i.malicious ? " (SU
             </div>
 
             <p className="text-[11px] leading-relaxed text-slate-500">
-              Include the full email â€” headers and body. The panel grows with your input, then
+              Include the full email — headers and body. The panel grows with your input, then
               scrolls internally at its compact maximum.
             </p>
 

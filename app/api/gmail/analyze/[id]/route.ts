@@ -10,7 +10,11 @@ import {
   refreshGmailAccessToken,
   GmailTokenPayload,
 } from "@/lib/gmailApi";
-import { decodeGmailRaw } from "@/lib/gmailDecoder";
+import {
+  decodeGmailRaw,
+  rebuildEmailFromFull,
+  type GmailPart,
+} from "@/lib/gmailDecoder";
 import { analyzeEmail } from "@/lib/emailForensics";
 import { persistCaseFromAnalysis } from "@/lib/db/casePipeline";
 
@@ -72,27 +76,56 @@ export async function GET(
       );
     }
 
-    const gmailUrl = new URL(
-      `https://gmail.googleapis.com/gmail/v1/users/me/messages/${encodeURIComponent(
-        params.id
-      )}`
-    );
+    const fetchMessage = (format: "raw" | "full") => {
+      const gmailUrl = new URL(
+        `https://gmail.googleapis.com/gmail/v1/users/me/messages/${encodeURIComponent(
+          params.id
+        )}`
+      );
+      gmailUrl.searchParams.set("format", format);
+      return fetch(gmailUrl.toString(), {
+        headers: {
+          Authorization: `Bearer ${tokenData.accessToken}`,
+        },
+        cache: "no-store",
+      });
+    };
 
-    gmailUrl.searchParams.set("format", "raw");
+    // Prefer the exact MIME source. If Gmail refuses format=raw, fall back
+    // to format=full (the same fetch the inbox quick scan uses) and rebuild
+    // the headers and text body from it.
+    let gmailResponse = await fetchMessage("raw");
+    let usedFallback = false;
 
-    const gmailResponse = await fetch(gmailUrl.toString(), {
-      headers: {
-        Authorization: `Bearer ${tokenData.accessToken}`,
-      },
-      cache: "no-store",
-    });
+    if (!gmailResponse.ok) {
+      const rawError = await gmailResponse.text();
+      console.error(
+        `[gmail/analyze] format=raw failed (${gmailResponse.status}):`,
+        rawError
+      );
+      gmailResponse = await fetchMessage("full");
+      usedFallback = true;
+    }
 
     if (!gmailResponse.ok) {
       const errorText = await gmailResponse.text();
+      console.error(
+        `[gmail/analyze] format=full failed (${gmailResponse.status}):`,
+        errorText
+      );
+
+      let googleMessage: string | undefined;
+      try {
+        googleMessage = JSON.parse(errorText)?.error?.message;
+      } catch {
+        /* non-JSON error body */
+      }
 
       return NextResponse.json(
         {
-          error: "Failed to fetch Gmail message.",
+          error: googleMessage
+            ? `Failed to fetch Gmail message: ${googleMessage}`
+            : "Failed to fetch Gmail message.",
           details: errorText,
         },
         { status: gmailResponse.status }
@@ -101,18 +134,12 @@ export async function GET(
 
     const gmailMessage = await gmailResponse.json();
 
-    if (!gmailMessage.raw) {
-      return NextResponse.json(
-        {
-          error:
-            "Gmail returned the message, but no raw MIME source was available.",
-        },
-        { status: 422 }
-      );
-    }
-
     // Gmail returns raw MIME as base64url encoded content.
-    const rawEmail = decodeGmailRaw(gmailMessage.raw);
+    const rawEmail = usedFallback
+      ? rebuildEmailFromFull(gmailMessage.payload as GmailPart)
+      : gmailMessage.raw
+        ? decodeGmailRaw(gmailMessage.raw)
+        : "";
 
     if (!rawEmail.trim()) {
       return NextResponse.json(
