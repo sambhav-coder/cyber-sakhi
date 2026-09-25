@@ -17,6 +17,7 @@ import { AppSidebar } from "@/components/AppSidebar";
 import { SOSModal } from "@/components/SOSModal";
 import { ChangePasswordModal } from "@/components/ChangePasswordModal";
 import { SakhiMascotWidget } from "@/components/companion/SakhiMascotWidget";
+import { NotificationBell } from "@/components/NotificationBell";
 import { clsx } from "clsx";
 import { twMerge } from "tailwind-merge";
 
@@ -119,13 +120,15 @@ const TopBar: React.FC<{ onOpenSidebar: () => void; sidebarCollapsed: boolean }>
           />
           <span className="hidden sm:inline">Share location</span>
           <span
-            className="absolute top-2 right-2 sm:static flex h-1.5 w-1.5"
+            className="absolute top-2 right-2 sm:relative sm:top-auto sm:right-auto flex h-1.5 w-1.5"
             aria-hidden="true"
           >
             <span className="absolute inline-flex h-full w-full rounded-full bg-red-500 opacity-60 animate-ping motion-reduce:animate-none" />
             <span className="relative inline-flex h-1.5 w-1.5 rounded-full bg-red-500" />
           </span>
         </button>
+
+        <NotificationBell />
 
         {/* User avatar + dropdown (only if authenticated) */}
         {status === "authenticated" && session?.user ? (
