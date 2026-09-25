@@ -1,4 +1,4 @@
-﻿"use client";
+"use client";
 
 import React, { useEffect, useLayoutEffect, useRef, useState } from "react";
 import { useRouter } from "next/navigation";
@@ -14,7 +14,10 @@ import {
   RotateCcw,
   AlertCircle,
   Inbox as InboxIcon,
+  History,
+  ChevronRight,
 } from "lucide-react";
+import Link from "next/link";
 import { EmailAnalysisResult } from "@/lib/emailTypes";
 import { addEvidenceItem } from "@/lib/storage";
 import { computeSha256 } from "@/lib/cryptoUtils";
@@ -86,7 +89,11 @@ export default function EmailForensicsPage() {
     threatType: string | null;
     severity: string | null;
   } | null>(null);
-  const [caseSaveError, setCaseSaveError] = useState<string | null>(null);
+  const [historyId, setHistoryId] = useState<string | null>(null);
+  const [historySaveError, setHistorySaveError] = useState<string | null>(null);
+  const [isCreatingCase, setIsCreatingCase] = useState(false);
+  const [createCaseError, setCreateCaseError] = useState<string | null>(null);
+  const [isOpeningHistory, setIsOpeningHistory] = useState(false);
   const [mounted, setMounted] = useState(false);
 
   useEffect(() => {
@@ -106,6 +113,50 @@ export default function EmailForensicsPage() {
     el.style.overflowY = needs > TEXTAREA_MAX_HEIGHT ? "auto" : "hidden";
   }, [rawEmail]);
 
+  // Opening a saved analysis from history: /email-forensics?history=<id>
+  useEffect(() => {
+    const id = new URLSearchParams(window.location.search).get("history");
+    if (!id) return;
+
+    let cancelled = false;
+    setIsOpeningHistory(true);
+    (async () => {
+      try {
+        const res = await fetch(`/api/email-forensics/history/${encodeURIComponent(id)}`, {
+          cache: "no-store",
+        });
+        const data = await res.json();
+        if (cancelled) return;
+        if (!res.ok) {
+          setMode("paste");
+          setError(data.error || "Could not open this analysis.");
+          return;
+        }
+        setResult(data.analysis as EmailAnalysisResult);
+        setHistoryId(data.historyId);
+        if (data.case?.id) {
+          setCaseLink({
+            id: data.case.id,
+            caseNumber: data.case.caseNumber || null,
+            title: data.case.title || null,
+            threatType: data.case.threatType || null,
+            severity: data.case.severity || null,
+          });
+        }
+      } catch {
+        if (!cancelled) {
+          setMode("paste");
+          setError("Network error while opening this analysis.");
+        }
+      } finally {
+        if (!cancelled) setIsOpeningHistory(false);
+      }
+    })();
+    return () => {
+      cancelled = true;
+    };
+  }, []);
+
   useEffect(() => {
     try {
       if (typeof window === "undefined") return;
@@ -117,16 +168,10 @@ export default function EmailForensicsPage() {
       if (parsed && typeof parsed === "object") {
         if (parsed.analysis && typeof parsed.analysis === "object") {
           setResult(parsed.analysis as EmailAnalysisResult);
-          if (parsed.case?.id) {
-            setCaseLink({
-              id: parsed.case.id,
-              caseNumber: parsed.case.caseNumber || null,
-              title: parsed.case.title || null,
-              threatType: parsed.case.threatType || null,
-              severity: parsed.case.severity || null,
-            });
-          } else if (parsed.caseSaveError) {
-            setCaseSaveError(String(parsed.caseSaveError));
+          if (parsed.historyId) {
+            setHistoryId(String(parsed.historyId));
+          } else if (parsed.historySaveError) {
+            setHistorySaveError(String(parsed.historySaveError));
           }
         } else {
           setResult(parsed as EmailAnalysisResult);
@@ -148,14 +193,16 @@ export default function EmailForensicsPage() {
     setResult(null);
     setError(null);
     setCaseLink(null);
-    setCaseSaveError(null);
+    setHistoryId(null);
+    setHistorySaveError(null);
+    setCreateCaseError(null);
     setShowAlertNotification(false);
 
     try {
       const res = await fetch("/api/email-forensics", {
         method: "POST",
         headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({ rawEmail: rawEmail.trim(), saveAsCase: true }),
+        body: JSON.stringify({ rawEmail: rawEmail.trim(), saveToHistory: true }),
       });
 
       const data = await res.json();
@@ -168,22 +215,44 @@ export default function EmailForensicsPage() {
         if (data.alerts && data.alerts.length > 0) {
           setShowAlertNotification(true);
         }
-        if (data.case?.id) {
-          setCaseLink({
-            id: data.case.id,
-            caseNumber: data.case.caseNumber || null,
-            title: data.case.title || null,
-            threatType: data.case.threatType || null,
-            severity: data.case.severity || null,
-          });
-        } else if (data.caseSaveError) {
-          setCaseSaveError(String(data.caseSaveError));
+        if (data.historyId) {
+          setHistoryId(String(data.historyId));
+        } else if (data.historySaveError) {
+          setHistorySaveError(String(data.historySaveError));
         }
       }
     } catch (err) {
       setError("Network error. Please check your connection and try again.");
     } finally {
       setIsAnalyzing(false);
+    }
+  };
+
+  const handleCreateCase = async () => {
+    if (!historyId || isCreatingCase) return;
+    setIsCreatingCase(true);
+    setCreateCaseError(null);
+    try {
+      const res = await fetch(
+        `/api/email-forensics/history/${encodeURIComponent(historyId)}/case`,
+        { method: "POST" }
+      );
+      const data = await res.json();
+      if (!res.ok || !data.case?.id) {
+        setCreateCaseError(data.error || "Could not create a case.");
+        return;
+      }
+      setCaseLink({
+        id: data.case.id,
+        caseNumber: data.case.caseNumber || null,
+        title: data.case.title || null,
+        threatType: data.case.threatType || null,
+        severity: data.case.severity || null,
+      });
+    } catch {
+      setCreateCaseError("Network error while creating the case.");
+    } finally {
+      setIsCreatingCase(false);
     }
   };
 
@@ -341,15 +410,18 @@ ${result.indicators.map(i => `• ${i.type}: ${i.value}${i.malicious ? " (SUSPIC
     setRawEmail("");
     setError(null);
     setCaseLink(null);
-    setCaseSaveError(null);
+    setHistoryId(null);
+    setHistorySaveError(null);
+    setCreateCaseError(null);
     setSavedEvidenceId(null);
+    if (window.location.search) router.replace("/email-forensics");
     setSaveError(null);
     setSaveSuccess(false);
     window.scrollTo(0, 0);
   };
 
-  const showChooseMode = !result && mode === "choose";
-  const showPasteMode = !result && mode === "paste";
+  const showChooseMode = !result && !isOpeningHistory && mode === "choose";
+  const showPasteMode = !result && !isOpeningHistory && mode === "paste";
 
   return (
     <div className="space-y-8 animate-in fade-in duration-300">
@@ -573,6 +645,17 @@ ${result.indicators.map(i => `• ${i.type}: ${i.value}${i.malicious ? " (SUSPIC
                 Both entry methods use Cyber Sakhi&apos;s single forensic analysis engine, so results
                 are identical regardless of how you get here.
               </span>
+            </div>
+
+            <div className="mt-5 flex justify-center">
+              <Link
+                href="/email-forensics/history"
+                className="inline-flex items-center gap-2 rounded-xl border border-white/[0.08] bg-white/[0.03] px-4 py-2.5 text-[13px] font-medium text-slate-200 transition-colors hover:border-white/[0.16] hover:bg-white/[0.06] hover:text-white"
+              >
+                <History className="h-4 w-4 text-slate-400" />
+                View analysis history
+                <ChevronRight className="h-3.5 w-3.5 text-slate-500" />
+              </Link>
             </div>
           </div>
         </>
@@ -812,12 +895,22 @@ ${result.indicators.map(i => `• ${i.type}: ${i.value}${i.malicious ? " (SUSPIC
           </form>
         </div>
       )}
+      {isOpeningHistory && !result && (
+        <div className="flex items-center justify-center gap-2 py-24 text-sm text-slate-400">
+          <Loader2 className="h-4 w-4 animate-spin" />
+          Opening saved analysis…
+        </div>
+      )}
       {/* Results */}
       {result && (
         <EmailAnalysisReport
           result={result}
           caseLink={caseLink}
-          caseSaveError={caseSaveError}
+          historyId={historyId}
+          historySaveError={historySaveError}
+          isCreatingCase={isCreatingCase}
+          createCaseError={createCaseError}
+          onCreateCase={handleCreateCase}
           isSaving={isSaving}
           savedEvidenceId={savedEvidenceId}
           saveSuccess={saveSuccess}

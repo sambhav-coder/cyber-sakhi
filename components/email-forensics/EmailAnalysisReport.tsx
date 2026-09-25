@@ -18,6 +18,8 @@ import {
   Loader2,
   ArrowRight,
   FolderOpen,
+  FolderPlus,
+  History,
   Fingerprint,
   Globe,
   Link2,
@@ -1347,7 +1349,11 @@ export interface EmailAnalysisReportProps {
     threatType: string | null;
     severity: string | null;
   } | null;
-  caseSaveError: string | null;
+  historyId: string | null;
+  historySaveError: string | null;
+  isCreatingCase: boolean;
+  createCaseError: string | null;
+  onCreateCase: () => void;
   isSaving: boolean;
   savedEvidenceId: string | null;
   saveSuccess: boolean;
@@ -1359,7 +1365,11 @@ export interface EmailAnalysisReportProps {
 export function EmailAnalysisReport({
   result,
   caseLink,
-  caseSaveError,
+  historyId,
+  historySaveError,
+  isCreatingCase,
+  createCaseError,
+  onCreateCase,
   isSaving,
   savedEvidenceId,
   saveSuccess,
@@ -1453,7 +1463,7 @@ export function EmailAnalysisReport({
           <div className="mt-4 flex flex-col gap-3 rounded-xl border border-emergency-800/40 bg-emergency-950/30 p-3 sm:flex-row sm:items-center sm:justify-between">
             <div className="min-w-0">
               <div className="text-xs font-black text-emergency-200">
-                Case Created: <span className="font-mono">{caseLink.caseNumber}</span>
+                Case opened: <span className="font-mono">{caseLink.caseNumber}</span>
               </div>
               <div className="truncate text-[10px] text-emergency-300/80">
                 {caseLink.title} · {caseLink.threatType} · severity {caseLink.severity}
@@ -1467,13 +1477,45 @@ export function EmailAnalysisReport({
               Open Case
             </Link>
           </div>
+        ) : historyId ? (
+          <div className="mt-4 flex flex-col gap-3 rounded-xl border border-white/[0.08] bg-white/[0.03] p-3 sm:flex-row sm:items-center sm:justify-between">
+            <div className="flex min-w-0 items-start gap-2.5">
+              <History className="mt-0.5 h-4 w-4 shrink-0 text-slate-400" />
+              <div className="min-w-0">
+                <div className="text-xs font-semibold text-slate-200">Saved to your analysis history</div>
+                <div className="text-[11px] text-slate-500">
+                  No case was opened. Open one only if you want to report or escalate this email.
+                </div>
+                {createCaseError ? (
+                  <div className="mt-1 text-[11px] text-amber-300">{createCaseError}</div>
+                ) : null}
+              </div>
+            </div>
+            <div className="flex shrink-0 items-center gap-2">
+              <Link
+                href="/email-forensics/history"
+                className="inline-flex items-center gap-1.5 rounded-xl border border-white/[0.08] px-3 py-2 text-xs font-semibold text-slate-300 transition hover:bg-white/[0.06] hover:text-white"
+              >
+                View history
+              </Link>
+              <button
+                type="button"
+                onClick={onCreateCase}
+                disabled={isCreatingCase}
+                className="inline-flex items-center gap-1.5 rounded-xl border border-emergency-700/50 bg-emergency-900/40 px-3 py-2 text-xs font-bold text-emergency-200 transition hover:bg-emergency-800 hover:text-white disabled:opacity-60"
+              >
+                {isCreatingCase ? <Loader2 className="h-3.5 w-3.5 animate-spin" /> : <FolderPlus className="h-3.5 w-3.5" />}
+                Open a case
+              </button>
+            </div>
+          </div>
         ) : null}
-        {caseSaveError ? (
+        {historySaveError ? (
           <div className="mt-3 flex items-center gap-2 rounded-xl border border-amber-700/50 bg-amber-950/40 p-3 text-xs text-amber-200">
             <AlertTriangle className="h-4 w-4 shrink-0 text-amber-400" />
             <span>
-              Analysis complete, but the case could not be saved to the database this time (
-              {caseSaveError}). You can still view the forensic report below.
+              Analysis complete, but it couldn&apos;t be saved to your history this time (
+              {historySaveError}). You can still view the forensic report below.
             </span>
           </div>
         ) : null}

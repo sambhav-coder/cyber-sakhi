@@ -16,7 +16,7 @@ import {
   type GmailPart,
 } from "@/lib/gmailDecoder";
 import { analyzeEmail } from "@/lib/emailForensics";
-import { persistCaseFromAnalysis } from "@/lib/db/casePipeline";
+import { saveAnalysisToHistory } from "@/lib/db/casePipeline";
 
 interface RouteContext {
   params: {
@@ -153,9 +153,9 @@ export async function GET(
     // Send the real email source into the existing forensic engine.
     const analysis = await analyzeEmail(rawEmail);
 
-    // Automatically create a Case for the successful analysis, mirroring the
-    // raw-paste flow (case + email investigation + indicators).
-    const persisted = await persistCaseFromAnalysis({
+    // Save to the user's analysis history, mirroring the raw-paste flow.
+    // No case is created unless the user asks for one.
+    const saved = await saveAnalysisToHistory({
       userId: session.user.id,
       result: analysis,
       source: "gmail",
@@ -172,27 +172,8 @@ export async function GET(
         internalDate: gmailMessage.internalDate || null,
       },
       analysis,
-      ...(persisted.createdCase
-        ? {
-            case: {
-              id: persisted.createdCase.id,
-              caseNumber: persisted.createdCase.case_number,
-              title: persisted.createdCase.title,
-              threatType: persisted.createdCase.threat_type,
-              status: persisted.createdCase.status,
-              severity: persisted.createdCase.severity,
-              createdAt: persisted.createdCase.created_at,
-              indicatorSaveState: persisted.indicatorSaveState,
-            },
-            caseSaveNote:
-              persisted.indicatorSaveState === "failed"
-                ? "Case created but some indicators could not be persisted."
-                : undefined,
-          }
-        : {
-            case: null,
-            caseSaveError: persisted.caseSaveError,
-          }),
+      historyId: saved.historyId,
+      historySaveError: saved.historySaveError,
     });
 
     // Update user-scoped cookie with refreshed token

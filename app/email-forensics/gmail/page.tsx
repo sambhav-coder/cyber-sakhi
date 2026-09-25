@@ -529,8 +529,8 @@ export default function GmailForensicsPage() {
         "cyber_sakhi_gmail_analysis",
         JSON.stringify({
           analysis: payload.analysis,
-          case: payload.case,
-          caseSaveError: payload.caseSaveError,
+          historyId: payload.historyId,
+          historySaveError: payload.historySaveError,
         })
       );
 

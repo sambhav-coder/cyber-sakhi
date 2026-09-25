@@ -1,6 +1,10 @@
 import type { EmailAnalysisResult } from "@/lib/emailTypes";
-import { createCase } from "@/lib/db/cases";
-import { createEmailInvestigation } from "@/lib/db/emailInvestigations";
+import { createCase, getCaseForUser } from "@/lib/db/cases";
+import {
+  attachInvestigationToCase,
+  createEmailInvestigation,
+  getEmailInvestigationForUser,
+} from "@/lib/db/emailInvestigations";
 import { createIndicators } from "@/lib/db/indicators";
 import type { CaseRow } from "./types";
 
@@ -42,75 +46,77 @@ function buildCaseDescription(
   return lines.join(" ");
 }
 
-export interface CasePipelineResult {
-  createdCase: CaseRow | null;
-  caseSaveError?: string;
-  investigationId?: string;
-  indicatorSaveState: "ok" | "failed";
+export interface HistorySaveResult {
+  historyId: string | null;
+  historySaveError?: string;
 }
 
 /**
- * Persists a completed email forensic analysis as a Case with its linked
- * email investigation record and extracted indicators. All-or-nothing only
- * for the case row itself; investigation and indicator saves are best-effort
- * so a failure there never erases the successfully created case.
+ * Default persistence for a manual analysis: an email investigation row (the
+ * user's analysis history) plus its indicators, with no case. A case is only
+ * created later if the user explicitly asks for one.
  */
-export async function persistCaseFromAnalysis(input: {
+export async function saveAnalysisToHistory(input: {
   userId: string;
   result: EmailAnalysisResult;
   source?: string;
   externalMessageId?: string | null;
-}): Promise<CasePipelineResult> {
-  const source = input.source ?? "pasted_headers";
-
-  let createdCase: CaseRow | null = null;
-  let caseSaveError: string | undefined;
-
-  try {
-    createdCase = await createCase({
-      userId: input.userId,
-      title: buildCaseTitle(input.result),
-      description: buildCaseDescription(input.result, source),
-      threatType: classifyThreatType(input.result),
-      status: "open",
-      severity: input.result.threatLevel,
-    });
-  } catch (caseError) {
-    return {
-      createdCase: null,
-      caseSaveError:
-        "Analysis succeeded but the case could not be persisted: " +
-        (caseError instanceof Error ? caseError.message : "unknown error"),
-      indicatorSaveState: "failed",
-    };
-  }
-
-  let investigationId: string | undefined;
+}): Promise<HistorySaveResult> {
+  let historyId: string;
   try {
     const investigation = await createEmailInvestigation({
       userId: input.userId,
-      caseId: createdCase.id,
       result: input.result,
-      source,
+      source: input.source ?? "pasted_headers",
       externalMessageId: input.externalMessageId ?? null,
     });
-    investigationId = investigation.id;
+    historyId = investigation.id;
+  } catch (error) {
+    return {
+      historyId: null,
+      historySaveError: error instanceof Error ? error.message : "unknown error",
+    };
+  }
+
+  try {
+    await createIndicators({
+      investigationId: historyId,
+      indicators: input.result.indicators,
+    });
   } catch {
-    investigationId = undefined;
+    /* indicators are best-effort; the history entry itself is saved */
   }
 
-  let indicatorSaveState: "ok" | "failed" = "ok";
-  if (investigationId) {
-    try {
-      await createIndicators({
-        investigationId,
-        caseId: createdCase.id,
-        indicators: input.result.indicators,
-      });
-    } catch {
-      indicatorSaveState = "failed";
-    }
+  return { historyId };
+}
+
+/**
+ * Promotes a saved history entry to a Case on request. Idempotent: if the
+ * entry is already linked to a case the user owns, that case is returned.
+ */
+export async function createCaseFromHistory(input: {
+  userId: string;
+  historyId: string;
+}): Promise<CaseRow | null> {
+  const investigation = await getEmailInvestigationForUser(input.historyId, input.userId);
+  if (!investigation) return null;
+
+  if (investigation.case_id) {
+    const existing = await getCaseForUser(investigation.case_id, input.userId);
+    if (existing) return existing;
   }
 
-  return { createdCase, investigationId, indicatorSaveState };
+  const result = investigation.analysis as EmailAnalysisResult;
+  const source = investigation.source ?? "pasted_headers";
+  const createdCase = await createCase({
+    userId: input.userId,
+    title: buildCaseTitle(result),
+    description: buildCaseDescription(result, source),
+    threatType: classifyThreatType(result),
+    status: "open",
+    severity: result.threatLevel,
+  });
+
+  await attachInvestigationToCase(input.historyId, input.userId, createdCase.id);
+  return createdCase;
 }

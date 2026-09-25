@@ -2,7 +2,7 @@ import { NextRequest, NextResponse } from "next/server";
 import { getServerSession } from "next-auth";
 import { authOptions } from "@/lib/authOptions";
 import { analyzeEmail } from "@/lib/emailForensics";
-import { persistCaseFromAnalysis } from "@/lib/db/casePipeline";
+import { saveAnalysisToHistory } from "@/lib/db/casePipeline";
 
 export async function POST(req: NextRequest) {
   try {
@@ -12,7 +12,7 @@ export async function POST(req: NextRequest) {
     }
 
     const body = await req.json();
-    const { rawEmail, saveAsCase = false } = body;
+    const { rawEmail, saveToHistory = false } = body;
 
     if (!rawEmail || typeof rawEmail !== "string") {
       return NextResponse.json(
@@ -34,39 +34,21 @@ export async function POST(req: NextRequest) {
 
     const result = await analyzeEmail(trimmed);
 
-    if (saveAsCase !== true) {
+    if (saveToHistory !== true) {
       return NextResponse.json(result);
     }
 
-    const persisted = await persistCaseFromAnalysis({
+    // Manual analyses land in the user's history. A case is only created
+    // when the user asks for one (POST /api/email-forensics/history/[id]/case).
+    const saved = await saveAnalysisToHistory({
       userId: session.user.id,
       result,
     });
 
-    if (!persisted.createdCase) {
-      return NextResponse.json({
-        ...result,
-        case: null,
-        caseSaveError: persisted.caseSaveError,
-      });
-    }
-
     return NextResponse.json({
       ...result,
-      case: {
-        id: persisted.createdCase.id,
-        caseNumber: persisted.createdCase.case_number,
-        title: persisted.createdCase.title,
-        threatType: persisted.createdCase.threat_type,
-        status: persisted.createdCase.status,
-        severity: persisted.createdCase.severity,
-        createdAt: persisted.createdCase.created_at,
-        indicatorSaveState: persisted.indicatorSaveState,
-      },
-      caseSaveNote:
-        persisted.indicatorSaveState === "failed"
-          ? "Case created but some indicators could not be persisted."
-          : undefined,
+      historyId: saved.historyId,
+      historySaveError: saved.historySaveError,
     });
   } catch (error) {
     return NextResponse.json(
