@@ -16,6 +16,7 @@ import {
 import { AppSidebar } from "@/components/AppSidebar";
 import { SOSModal } from "@/components/SOSModal";
 import { ChangePasswordModal } from "@/components/ChangePasswordModal";
+import { SakhiMascotWidget } from "@/components/companion/SakhiMascotWidget";
 import { clsx } from "clsx";
 import { twMerge } from "tailwind-merge";
 
@@ -350,6 +351,8 @@ export const AppShell: React.FC<AppShellProps> = ({ children }) => {
           {children}
         </main>
       </div>
+
+      <SakhiMascotWidget />
     </div>
   );
 };
