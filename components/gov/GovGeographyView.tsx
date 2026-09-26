@@ -79,6 +79,8 @@ type GeoResult = {
   source?: string;
   verification?: string;
   excludedCounts?: { unlocated: number; invalidOrIncomplete: number };
+  isDemo?: boolean;
+  cityMarkers?: Array<{ label: string; latitude: number; longitude: number; cases: number; districtCode: string }>;
 };
 
 const METRICS: Array<{ key: keyof Metric; label: string }> = [
@@ -250,21 +252,28 @@ export function GovGeographyView({ canViewCases = false, initialSelected = null 
     [join],
   );
   const maxMetric = useMemo(() => {
+    if (selected && drill) return Math.max(0, ...drill.rows.map((r) => r.metric[metric]));
     let m = 0;
     for (const r of join.byGeoName.values()) m = Math.max(m, r.metric[metric]);
     return m;
-  }, [join, metric]);
+  }, [join, metric, selected, drill]);
 
   const fills = useMemo(() => {
     const map = new Map<string, string>();
     if (!shapes) return map;
-    for (const f of shapes.features) {
+    const targetShapes = selected && districtShapes
+      ? districtShapes.features.filter((feature) => feature.properties.ST_NM === selected).map((feature) => ({ ...feature, properties: { ST_NM: feature.properties.DISTRICT } }))
+      : shapes.features;
+    for (const f of targetShapes) {
       const name = f.properties.ST_NM;
       if (!showCases) {
         map.set(name, NEUTRAL_FILL);
       } else if (mode === "live-data") {
-        const joined = join.byGeoName.get(name);
-        map.set(name, volumeFillForCount(joined?.metric[metric] ?? 0, Math.max(1, maxMetric)));
+        const row = selected
+          ? (drill?.rows ?? []).find((entry) => entry.code === name || entry.label === name)
+          : join.byGeoName.get(name);
+        const value = row ? row.metric[metric] : 0;
+        map.set(name, volumeFillForCount(value, Math.max(1, maxMetric)));
       } else {
         // A boundary with no verified case aggregate is deliberately neutral.
         // Decorative colouring would imply a location-derived signal that does
@@ -273,7 +282,7 @@ export function GovGeographyView({ canViewCases = false, initialSelected = null 
       }
     }
     return map;
-  }, [shapes, mode, join, metric, maxMetric, showCases]);
+  }, [shapes, districtShapes, selected, drill, mode, join, metric, maxMetric, showCases]);
   const fillsId = useMemo(
     () => [...fills.entries()].map(([k, v]) => `${k}=${v}`).join("|").length + fills.size * 7 + metric.length,
     // eslint-disable-next-line react-hooks/exhaustive-deps
@@ -461,7 +470,7 @@ export function GovGeographyView({ canViewCases = false, initialSelected = null 
         <div>
           <h2 className="text-lg font-bold text-slate-100">Geographic Intelligence</h2>
           <p className="text-xs text-slate-400">
-            Cyber Sakhi case data · Officer-entered, unverified ·{" "}
+            {data?.isDemo ? "SIH DEMO GIS DATA · deterministic local seed · " : "Cyber Sakhi case data · Officer-entered, unverified · "}
             {lastUpdated ? `Updated ${new Date(lastUpdated).toLocaleString()}${stale ? " · stale" : ""}` : "Loading…"}
           </p>
         </div>
@@ -523,6 +532,12 @@ export function GovGeographyView({ canViewCases = false, initialSelected = null 
         </div>
       </section>
 
+      {data?.isDemo && (
+        <section className="rounded-xl border border-sky-400/30 bg-sky-400/10 px-4 py-2 text-xs text-sky-100" role="status">
+          <span className="font-bold tracking-wide">SIH DEMO GIS DATA</span> · local deterministic demonstration records; not production Government cases.
+        </section>
+      )}
+
       {mode === "visual-preview" && sceneReady && (
         <section className="rounded-xl border border-slate-600/70 bg-slate-900/70 px-4 py-3 text-center text-xs text-slate-300" role="status">
           <span className="font-bold uppercase tracking-wide text-slate-100">Geographic coverage unavailable.</span>{" "}
@@ -580,7 +595,12 @@ export function GovGeographyView({ canViewCases = false, initialSelected = null 
                   // (officer district codes have no reliable mapping to
                   // Census names).
                   if (!selected && !flyingTo) requestState(name);
+                  else if (selected && name) {
+                    const district = (drill?.rows ?? []).find((row) => row.label === name || row.code === name);
+                    if (district) void openDistrict(district.code);
+                  }
                 }}
+                cityMarkers={selected && data?.isDemo ? drill?.cityMarkers : []}
               />
             )
           )}

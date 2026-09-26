@@ -69,6 +69,7 @@ export interface India3DSceneProps {
   /** Region name to frame (state drill-down), null = whole India. */
   focusName: string | null;
   preset: CameraPresetRequest | null;
+  cityMarkers?: Array<{ label: string; latitude: number; longitude: number; cases: number }>;
   onHover: (name: string | null, x: number, y: number) => void;
   onSelect: (name: string | null) => void;
 }
@@ -568,6 +569,22 @@ export function India3DScene(props: India3DSceneProps) {
       }
       world.add(group);
       entries.set(name, { name, group, materials, baseColors, center, radius, label });
+    }
+
+    // Demo/locality markers are supplied only when the caller has verified
+    // coordinates. They are projected by the same map projection as the
+    // administrative geometry; no marker is ever placed by approximation.
+    for (const city of cbRef.current.cityMarkers ?? []) {
+      const point = projectLonLat(city.longitude, city.latitude);
+      const radius = 0.42 + Math.min(1.25, Math.sqrt(Math.max(0, city.cases)) / 8);
+      const marker = new THREE.Mesh(
+        new THREE.SphereGeometry(radius, 16, 12),
+        new THREE.MeshBasicMaterial({ color: city.cases >= 55 ? 0xfb7185 : city.cases >= 35 ? 0xfbbf24 : 0x5eead4 }),
+      );
+      marker.position.set(point.x, 2.1, point.z);
+      marker.userData.geoName = city.label;
+      world.add(marker);
+      pickables.push(marker);
     }
 
     // Initial hero framing: tight premium-visualization fit so India
