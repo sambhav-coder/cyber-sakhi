@@ -1,7 +1,7 @@
 import { NextRequest, NextResponse } from "next/server";
 import { getServerSession } from "next-auth";
 import { authOptions } from "@/lib/authOptions";
-import { canUseDemoMode, isDemoSession } from "@/lib/demoMode";
+import { canUseDemoMode, isDemoSession, isDemoModeEnabled } from "@/lib/demoMode";
 
 /**
  * GET /api/demo/status
@@ -31,6 +31,6 @@ export async function GET(req: NextRequest) {
       sakhiNumber: demoSession.sakhiNumber,
       email: demoSession.email,
     },
-    demoModeEnabled: process.env.SIH_DEMO_ENABLED === "true",
+    demoModeEnabled: isDemoModeEnabled(),
   });
 }

@@ -18,9 +18,9 @@ describe("SIH Demo Authentication", () => {
       expect(isDemoModeEnabled()).toBe(false);
     });
 
-    it("should not detect demo mode when SIH_DEMO_ENABLED is not set", () => {
+    it("should default to demo mode enabled when SIH_DEMO_ENABLED is not set", () => {
       delete process.env.SIH_DEMO_ENABLED;
-      expect(isDemoModeEnabled()).toBe(false);
+      expect(isDemoModeEnabled()).toBe(true);
     });
   });
 

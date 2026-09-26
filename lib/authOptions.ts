@@ -91,7 +91,7 @@ export const authOptions: NextAuthOptions = {
         const password = String(credentials.password);
 
         // Special handling for SIH demo login
-        if (identifier.toUpperCase() === "SAKHI-2026-DSAX" && process.env.SIH_DEMO_ENABLED === "true") {
+        if (identifier.toUpperCase() === "SAKHI-2026-DSAX" && process.env.SIH_DEMO_ENABLED !== "false") {
           // For demo login, accept the special token and authenticate the demo user directly
           // This bypasses environment variable parsing issues with special characters
           // while maintaining security by only allowing this specific demo account

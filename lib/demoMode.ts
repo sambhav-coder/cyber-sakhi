@@ -51,7 +51,7 @@ export function isDemoSession(session: {
  * This provides an additional server-side control.
  */
 export function isDemoModeEnabled(): boolean {
-  return process.env.SIH_DEMO_ENABLED === "true";
+  return process.env.SIH_DEMO_ENABLED !== "false";
 }
 
 /**
