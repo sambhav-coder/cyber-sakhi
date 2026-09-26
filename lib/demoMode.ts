@@ -33,8 +33,9 @@ export function isDemoSession(session: {
   const { sakhiNumber, email, role } = session.user;
 
   // Verify this is the demo account by Sakhi Number and email
+  // Also accept the ephemeral demo session created for production environments
   const isDemoAccount = 
-    sakhiNumber === DEMO_SAKHI_NUMBER && 
+    sakhiNumber?.toUpperCase() === DEMO_SAKHI_NUMBER && 
     email?.toLowerCase() === DEMO_JUDGE_EMAIL.toLowerCase() &&
     role === "USER";
 
