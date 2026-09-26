@@ -19,6 +19,7 @@ import {
   type CameraPresetRequest,
   type SceneGeoCollection,
 } from "./India3DScene";
+import { demoDistrictCodeForBoundary } from "@/lib/gov/govDemoGis";
 
 /**
  * Map-first Geographic Intelligence view over a real WebGL 3D scene.
@@ -270,7 +271,11 @@ export function GovGeographyView({ canViewCases = false, initialSelected = null 
         map.set(name, NEUTRAL_FILL);
       } else if (mode === "live-data") {
         const row = selected
-          ? (drill?.rows ?? []).find((entry) => entry.code === name || entry.label === name)
+          ? (drill?.rows ?? []).find((entry) => {
+              const stateCode = (data?.rows ?? []).find((item) => STATE_CODE_TO_GEO_NAME[item.code] === selected)?.code ?? null;
+              const boundaryCode = demoDistrictCodeForBoundary(stateCode, name);
+              return entry.code === boundaryCode || entry.label === name;
+            })
           : join.byGeoName.get(name);
         const value = row ? row.metric[metric] : 0;
         map.set(name, volumeFillForCount(value, Math.max(1, maxMetric)));
@@ -282,7 +287,7 @@ export function GovGeographyView({ canViewCases = false, initialSelected = null 
       }
     }
     return map;
-  }, [shapes, districtShapes, selected, drill, mode, join, metric, maxMetric, showCases]);
+  }, [shapes, districtShapes, selected, drill, data, mode, join, metric, maxMetric, showCases]);
   const fillsId = useMemo(
     () => [...fills.entries()].map(([k, v]) => `${k}=${v}`).join("|").length + fills.size * 7 + metric.length,
     // eslint-disable-next-line react-hooks/exhaustive-deps
@@ -328,6 +333,7 @@ export function GovGeographyView({ canViewCases = false, initialSelected = null 
     }
     return best;
   }, [data]);
+  const selectedStateCode = selected ? primaryCodeByGeo.get(selected)?.code ?? null : null;
 
   useEffect(() => {
     if (typeof window !== "undefined" && window.matchMedia?.("(prefers-reduced-motion: reduce)").matches) {
@@ -455,7 +461,7 @@ export function GovGeographyView({ canViewCases = false, initialSelected = null 
   // honestly show "no scoped aggregate" instead of a zero.
   const hoveredDistrictAgg =
     selected && hover
-      ? (drill?.rows ?? []).find((r) => r.label === hover.name || r.code === hover.name) ?? null
+      ? (drill?.rows ?? []).find((r) => r.code === demoDistrictCodeForBoundary(selectedStateCode, hover.name) || r.label === hover.name) ?? null
       : null;
   const selectedAgg = selected ? join.byGeoName.get(selected) ?? null : null;
   const unmatchedNote =

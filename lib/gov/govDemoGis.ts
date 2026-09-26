@@ -14,6 +14,27 @@ export type DemoCity = { code: string; label: string; latitude: number; longitud
 export type DemoDistrict = { code: string; label: string; cities: DemoCity[] };
 export type DemoState = { code: string; geoName: string; label: string; districts: DemoDistrict[] };
 
+/** Census-2011 boundary name → stable demo district code. This is the one
+ * explicit adapter between the pinned boundary asset and the GIS seed; UI
+ * code joins only by the stable code, never by city/display-name equality. */
+export const DEMO_BOUNDARY_DISTRICTS: Readonly<Record<string, readonly [string, string?]>> = Object.freeze({
+  AP: ["Adilabad", "Anantapur"], AR: ["Anjaw", "Changlang"], AS: ["Baksa", "Barpeta"], BR: ["Araria", "Aurangabad"],
+  CG: ["Bastar", "Bijapur"], GA: ["North Goa", "South Goa"], GJ: ["Ahmadabad", "Amreli"], HR: ["Ambala", "Bhiwani"],
+  HP: ["Bilaspur", "Chamba"], JH: ["Bokaro", "Chatra"], KA: ["Bagalkot", "Bangalore Rural"], KL: ["Alappuzha", "Ernakulam"],
+  MP: ["Alirajpur", "Anuppur"], MH: ["Ahmadnagar", "Akola"], MN: ["Bishnupur", "Chandel"], ML: ["East Garo Hills", "East Khasi Hills"],
+  MZ: ["Aizawl", "Champhai"], NL: ["Dimapur", "Kiphire"], OD: ["Anugul", "Balangir"], PB: ["Amritsar", "Barnala"],
+  RJ: ["Ajmer", "Alwar"], SK: ["East", "North"], TN: ["Ariyalur", "Chennai"], TG: ["Adilabad", "Anantapur"], TR: ["Dhalai", "North Tripura"],
+  UP: ["Agra", "Aligarh"], UT: ["Almora", "Bageshwar"], WB: ["Bankura", "Barddhaman"], AN: ["Nicobar", "South Andaman"],
+  CH: ["Chandigarh"], DN: ["Dadra & Nagar Haveli", "Daman"], DL: ["Central", "East"], JK: ["Anantnag", "Badgam"],
+  LA: ["Anantnag", "Badgam"], LD: ["Lakshadweep"], PY: ["Mahe", "Karaikal"],
+});
+
+export function demoDistrictCodeForBoundary(stateCode: string | null, boundaryDistrictName: string): string | null {
+  if (!stateCode) return null;
+  const position = DEMO_BOUNDARY_DISTRICTS[stateCode]?.indexOf(boundaryDistrictName) ?? -1;
+  return position >= 0 ? `${stateCode}-${String(position + 1).padStart(2, "0")}` : null;
+}
+
 const raw: Array<[string, string, string, string, number, number, string, number, number]> = [
   ["AP","Andhra Pradesh","Andhra Pradesh","Visakhapatnam",17.6868,83.2185,"Vijayawada",16.5062,80.6480],
   ["AR","Arunanchal Pradesh","Arunachal Pradesh","Itanagar",27.0844,93.6053,"Pasighat",28.0661,95.3268],
@@ -64,10 +85,11 @@ function split(total: number, index: number) {
 
 export const SIH_DEMO_GIS_STATES: DemoState[] = raw.map(([code, geoName, label, cityA, latA, lonA, cityB, latB, lonB], index) => {
   const total = totalFor(index);
-  const first = Math.ceil(total * (0.56 + (index % 4) * 0.04));
+  const boundary = DEMO_BOUNDARY_DISTRICTS[code];
+  const first = boundary[1] ? Math.ceil(total * (0.56 + (index % 4) * 0.04)) : total;
   return { code, geoName, label, districts: [
-    { code: `${code}-01`, label: cityA, cities: [{ code: `${code}-01-A`, label: cityA, latitude: latA, longitude: lonA, cases: first }] },
-    { code: `${code}-02`, label: cityB, cities: [{ code: `${code}-02-A`, label: cityB, latitude: latB, longitude: lonB, cases: total - first }] },
+    { code: `${code}-01`, label: boundary[0], cities: [{ code: `${code}-01-A`, label: cityA, latitude: latA, longitude: lonA, cases: first }] },
+    ...(boundary[1] ? [{ code: `${code}-02`, label: boundary[1], cities: [{ code: `${code}-02-A`, label: cityB, latitude: latB, longitude: lonB, cases: total - first }] }] : []),
   ] };
 });
 
