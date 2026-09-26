@@ -2,7 +2,6 @@ import { NextResponse } from "next/server";
 import { requireGovApi } from "@/lib/gov/govApi";
 import { govExplorer, resolveGovScopeFilter } from "@/lib/gov/govQueries";
 
-export const runtime = "nodejs";
 
 export async function GET(req: Request) {
   const guard = await requireGovApi(req, "case.view_meta");

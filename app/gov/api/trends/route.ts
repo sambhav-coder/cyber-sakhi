@@ -1,7 +1,6 @@
 import { NextResponse } from "next/server";
 import { requireGovApi } from "@/lib/gov/govApi";
 import { govTrends, resolveGovScopeFilter } from "@/lib/gov/govQueries";
-export const runtime = "nodejs";
 export async function GET(req: Request) {
  const guard = await requireGovApi(req, "analytics.view"); if (!guard.ok) return guard.response;
  const p = new URL(req.url).searchParams;

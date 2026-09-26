@@ -7,7 +7,6 @@ import { persistGovAuditEvent } from "@/lib/gov/govAuditPersistence";
 import { getSupabaseServer } from "@/lib/supabaseServer";
 import { getClientIp, getUserAgent, govJsonError, govJsonOk } from "@/lib/gov/govHttp";
 
-export const runtime = "nodejs";
 
 const KEY_RE = /^[^|]{1,80}\|[^|]{1,40}\|[\s\S]{1,2048}$/;
 

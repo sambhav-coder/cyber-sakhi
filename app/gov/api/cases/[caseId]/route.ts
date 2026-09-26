@@ -6,7 +6,6 @@ import { buildGovAuditEvent } from "@/lib/gov/govAudit";
 import { persistGovAuditEvent } from "@/lib/gov/govAuditPersistence";
 import { isCrossOriginRequest, govJsonError } from "@/lib/gov/govHttp";
 
-export const runtime = "nodejs";
 export async function GET(req: Request, { params }: { params: { caseId: string } }) {
   const guard = await requireGovApi(req, "case.view"); if (!guard.ok) return guard.response;
   const resource = await requireScopedCase(guard.context, params.caseId); if (isGovApiError(resource)) return resource;

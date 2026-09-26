@@ -14,7 +14,6 @@ import {
 import { revokeGovSession } from "@/lib/gov/govSession";
 import { getGovRequestAuth } from "@/lib/gov/govSessionHttp";
 
-export const runtime = "nodejs";
 
 export async function POST(req: Request): Promise<NextResponse> {
   // Logout is idempotent: an invalid/missing session still clears the cookie.

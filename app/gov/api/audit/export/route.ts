@@ -6,7 +6,6 @@ import { buildGovAuditEvent } from "@/lib/gov/govAudit";
 import { persistGovAuditEvent } from "@/lib/gov/govAuditPersistence";
 import { getClientIp, getUserAgent, govJsonError } from "@/lib/gov/govHttp";
 
-export const runtime = "nodejs";
 
 const csv = (v: unknown) => `"${String(v ?? "").replace(/"/g, '""')}"`;
 

@@ -4,7 +4,6 @@ import { resolveGovScopeFilter } from "@/lib/gov/govQueries";
 import { govDashboardMetrics } from "@/lib/gov/govQueries";
 import { govDashboardWindow } from "@/lib/gov/govQueries";
 
-export const runtime = "nodejs";
 
 const RANGES = new Set(["today", "7d", "30d", "90d", "custom"]);
 

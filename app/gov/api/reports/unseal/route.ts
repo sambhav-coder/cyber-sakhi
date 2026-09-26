@@ -14,7 +14,6 @@ import { buildGovAuditEvent } from "@/lib/gov/govAudit";
 import { persistGovAuditEvent } from "@/lib/gov/govAuditPersistence";
 import { getClientIp, getUserAgent, govForbidden, govJsonError, govJsonOk } from "@/lib/gov/govHttp";
 
-export const runtime = "nodejs";
 
 /**
  * Unseal one report dossier for a scoped case.

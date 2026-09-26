@@ -3,7 +3,6 @@ import { requireGovApi } from "@/lib/gov/govApi";
 import { govJsonError } from "@/lib/gov/govHttp";
 import { listExternalIndicators } from "@/lib/gov/govExternalIntel";
 
-export const runtime = "nodejs";
 
 export async function GET(req: Request) {
   const guard = await requireGovApi(req, "indicator.view");

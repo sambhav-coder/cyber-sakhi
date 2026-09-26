@@ -6,7 +6,6 @@ import { buildGovAuditEvent } from "@/lib/gov/govAudit";
 import { persistGovAuditEvent } from "@/lib/gov/govAuditPersistence";
 import { listCaseLocationsForGov } from "@/lib/db/caseLocations";
 
-export const runtime = "nodejs";
 
 /**
  * Government read path for case live-locations (exact coordinates are PII):

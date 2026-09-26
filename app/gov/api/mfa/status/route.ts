@@ -6,7 +6,6 @@ import {
   getGovMfaFactor,
 } from "@/lib/gov/govMfaEnrollment";
 
-export const runtime = "nodejs";
 
 /** Authenticated MFA status for UI gating (`none` | `pending` | `enabled`). */
 export async function GET(req: Request): Promise<NextResponse> {

@@ -3,7 +3,6 @@ import { requireGovApi } from "@/lib/gov/govApi";
 import { govForbidden, govJsonError, isCrossOriginRequest } from "@/lib/gov/govHttp";
 import { externalIntelSummary, syncUrlhaus } from "@/lib/gov/govExternalIntel";
 
-export const runtime = "nodejs";
 
 export async function GET(req: Request) {
   const guard = await requireGovApi(req, "policy.view");

@@ -20,7 +20,6 @@ import type { GovOfficerContext } from "@/lib/gov/govTypes";
 import { completeGovSessionTotp, revokeGovSession } from "@/lib/gov/govSession";
 import { verifyGovOfficerTotp } from "@/lib/gov/govTotp";
 
-export const runtime = "nodejs";
 
 const MAX_EMAIL_LENGTH = 320;
 const MAX_PASSWORD_LENGTH = 512;

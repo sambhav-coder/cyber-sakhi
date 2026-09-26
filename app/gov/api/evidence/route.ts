@@ -4,7 +4,6 @@ import { resolveGovScopeFilter, govEvidenceForCase, govExplorer } from "@/lib/go
 import { getSupabaseServer } from "@/lib/supabaseServer";
 import { throwIfError } from "@/lib/db/errors";
 
-export const runtime = "nodejs";
 
 export async function GET(req: Request) {
   const guard = await requireGovApi(req, "evidence.view");

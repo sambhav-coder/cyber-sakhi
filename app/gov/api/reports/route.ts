@@ -5,7 +5,6 @@ import { govOfficerAuditActor, govReportDataset, recordGovExport, resolveGovScop
 import { buildGovAuditEvent } from "@/lib/gov/govAudit";
 import { persistGovAuditEvent } from "@/lib/gov/govAuditPersistence";
 import { govJsonError } from "@/lib/gov/govHttp";
-export const runtime = "nodejs";
 const csv = (v: unknown) => `"${String(v ?? "").replace(/"/g, '""')}"`;
 function buildPdf(lines: string[]): Uint8Array {
   // Minimal standards-compliant, text-only PDF. Export content is derived from

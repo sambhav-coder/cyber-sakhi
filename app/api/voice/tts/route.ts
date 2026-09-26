@@ -4,7 +4,6 @@ import { synthesizeWithEdgeTTS, type EdgeVoiceLanguage } from "@/lib/voice/edgeT
 const MARKDOWN_STRIP = /[*_`#>|~]/g;
 const CONTROL_STRIP = /[\u0000-\u001f\u007f]/g;
 
-export const runtime = "nodejs";
 export const dynamic = "force-dynamic";
 
 export async function POST(req: NextRequest) {

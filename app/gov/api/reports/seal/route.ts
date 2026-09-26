@@ -10,7 +10,6 @@ import { buildGovAuditEvent } from "@/lib/gov/govAudit";
 import { persistGovAuditEvent } from "@/lib/gov/govAuditPersistence";
 import { getClientIp, getUserAgent, govForbidden, govJsonError, govJsonOk } from "@/lib/gov/govHttp";
 
-export const runtime = "nodejs";
 
 /**
  * Set (or rotate) the per-report password seal for one scoped case.

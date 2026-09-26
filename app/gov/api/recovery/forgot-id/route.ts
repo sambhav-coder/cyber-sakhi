@@ -17,7 +17,6 @@ import {
 } from "@/lib/gov/govHttp";
 import { govRecoveryRateLimiter } from "@/lib/gov/govRateLimit";
 
-export const runtime = "nodejs";
 
 /**
  * Forgot User ID. Always returns the same generic message whether or not

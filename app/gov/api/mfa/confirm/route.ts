@@ -16,7 +16,6 @@ import { confirmGovMfaEnrollment } from "@/lib/gov/govMfaEnrollment";
 import { govRecoveryRateLimiter } from "@/lib/gov/govRateLimit";
 import { completeGovSessionTotp } from "@/lib/gov/govSession";
 
-export const runtime = "nodejs";
 
 /**
  * Confirm TOTP enrollment with a code from the officer's authenticator

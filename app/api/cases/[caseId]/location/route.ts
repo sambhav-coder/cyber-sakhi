@@ -11,7 +11,6 @@ import {
 } from "@/lib/db/caseLocations";
 import { logAuditEvent } from "@/lib/audit";
 
-export const runtime = "nodejs";
 
 function notFound() {
   // Masked: foreign and missing case IDs are indistinguishable.

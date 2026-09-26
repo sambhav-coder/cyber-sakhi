@@ -11,7 +11,6 @@ import type { IndicatorType, ReportCategory } from "@/lib/offenderNetwork/consta
  * real reports, and uses fixed synthetic reporter ids so running it twice
  * adds nothing. Gated exactly like /dev-login. */
 
-export const runtime = "nodejs";
 export const dynamic = "force-dynamic";
 
 interface DemoIndicator {

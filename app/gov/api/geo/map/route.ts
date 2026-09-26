@@ -6,7 +6,6 @@ import {
   buildGovMapContract,
 } from "@/lib/gov/govMapContract";
 
-export const runtime = "nodejs";
 
 /**
  * Privacy-preserving intelligence-map contract.

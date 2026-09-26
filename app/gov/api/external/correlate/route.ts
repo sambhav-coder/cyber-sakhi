@@ -3,7 +3,6 @@ import { requireGovApi } from "@/lib/gov/govApi";
 import { govSearchIndicators, resolveGovScopeFilter } from "@/lib/gov/govQueries";
 import { govJsonError, govJsonOk } from "@/lib/gov/govHttp";
 
-export const runtime = "nodejs";
 
 /**
  * Correlate one external IOC against the officer's scoped Cyber-Sakhi

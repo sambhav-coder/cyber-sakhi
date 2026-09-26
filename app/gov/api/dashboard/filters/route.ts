@@ -3,7 +3,6 @@ import { guardGovApiRequest } from "@/lib/gov/govGuard";
 import { resolveGovScopeFilter } from "@/lib/gov/govQueries";
 import { govDashboardFilterOptions } from "@/lib/gov/govQueries";
 
-export const runtime = "nodejs";
 
 /**
  * Distinct filter options for the Overview selectors. Values come from the

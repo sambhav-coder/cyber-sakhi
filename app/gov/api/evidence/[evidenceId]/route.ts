@@ -7,7 +7,6 @@ import { govEvidenceIntegrity, govOfficerAuditActor } from "@/lib/gov/govQueries
 import { buildGovAuditEvent } from "@/lib/gov/govAudit";
 import { persistGovAuditEvent } from "@/lib/gov/govAuditPersistence";
 import { govJsonError } from "@/lib/gov/govHttp";
-export const runtime = "nodejs";
 export async function GET(req: Request, { params }: { params: { evidenceId: string } }) {
   const guard = await requireGovApi(req, "evidence.view"); if (!guard.ok) return guard.response;
   if (!isValidGovResourceId(params.evidenceId)) return govJsonError(404, "NOT_FOUND", "Not found.");

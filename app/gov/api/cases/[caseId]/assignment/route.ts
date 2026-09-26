@@ -4,7 +4,6 @@ import { requireGovApi, requireScopedCase, isGovApiError } from "@/lib/gov/govAp
 import { govAssignCase, govOfficerAuditActor, govOfficerCandidates } from "@/lib/gov/govQueries";
 import { govJsonError, isCrossOriginRequest } from "@/lib/gov/govHttp";
 
-export const runtime = "nodejs";
 
 export async function GET(req: Request, { params }: { params: { caseId: string } }) {
   const guard = await requireGovApi(req, "case.assign"); if (!guard.ok) return guard.response;

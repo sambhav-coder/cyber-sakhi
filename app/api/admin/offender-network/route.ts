@@ -17,7 +17,6 @@ import { K_ANONYMITY, type ReportCategory } from "@/lib/offenderNetwork/constant
  * Reporters are fingerprints too, so "6 victims" is a count and nothing
  * more. */
 
-export const runtime = "nodejs";
 export const dynamic = "force-dynamic";
 
 export interface AdminOffender {

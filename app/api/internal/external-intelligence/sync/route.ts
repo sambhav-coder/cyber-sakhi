@@ -1,7 +1,6 @@
 import { NextResponse } from "next/server";
 import { syncUrlhaus } from "@/lib/gov/govExternalIntel";
 
-export const runtime = "nodejs";
 
 /** Scheduler-only route. It accepts no source or credential from the caller. */
 export async function GET(req: Request) {

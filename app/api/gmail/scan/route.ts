@@ -25,7 +25,6 @@ import { analyzeEmail } from "@/lib/emailForensics";
  * still happen only when the user opens a message.
  * ------------------------------------------------------------------ */
 
-export const runtime = "nodejs";
 export const dynamic = "force-dynamic";
 
 const MAX_IDS = 25;

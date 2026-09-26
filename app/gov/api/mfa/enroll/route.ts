@@ -19,7 +19,6 @@ import {
 } from "@/lib/gov/govMfaEnrollment";
 import { govRecoveryRateLimiter } from "@/lib/gov/govRateLimit";
 
-export const runtime = "nodejs";
 
 /**
  * Begin TOTP enrollment for the authenticated officer. Replacing an

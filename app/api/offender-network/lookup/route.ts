@@ -13,7 +13,6 @@ import {
  * Returns counts only; region and category detail is released once at
  * least K_ANONYMITY distinct accounts have reported the same identifier. */
 
-export const runtime = "nodejs";
 export const dynamic = "force-dynamic";
 
 export async function POST(req: NextRequest) {

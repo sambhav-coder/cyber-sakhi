@@ -18,7 +18,6 @@ import {
 } from "@/lib/gov/govHttp";
 import { govRecoveryRateLimiter } from "@/lib/gov/govRateLimit";
 
-export const runtime = "nodejs";
 
 const unknownActor: GovAuditActor = { kind: "unknown", detail: "password_reset" };
 

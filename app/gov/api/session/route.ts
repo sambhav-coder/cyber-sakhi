@@ -12,7 +12,6 @@ import {
 } from "@/lib/gov/govHttp";
 import { getGovRequestAuth } from "@/lib/gov/govSessionHttp";
 
-export const runtime = "nodejs";
 
 /** Safe, secret-free officer profile for the console header / session checks. */
 function publicOfficer(
