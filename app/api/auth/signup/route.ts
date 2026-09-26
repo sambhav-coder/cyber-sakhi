@@ -4,6 +4,7 @@ import { getServerSession } from "next-auth";
 import { authOptions } from "@/lib/authOptions";
 import { createUser, findUserByEmail, generateSecurePassword } from "@/lib/userStore";
 import { storeOneTimeCredentials } from "@/lib/onetimeCookie";
+import { sendWelcomeEmailOnce } from "@/lib/welcomeEmail";
 
 const EMAIL_REGEX = /^[^\s@]+@[^\s@]+\.[^\s@]+$/;
 const PHONE_REGEX = /^[+\d][\d\s()\-]{7,}$/;
@@ -80,6 +81,11 @@ export async function POST(req: NextRequest) {
       city: cityStr || null,
       phone: phoneStr || null,
     });
+
+    // Best-effort transactional delivery occurs after persistence. It is
+    // intentionally awaited/caught inside the mailer so a Resend failure can
+    // never turn a successful registration into an auth failure.
+    await sendWelcomeEmailOnce({ userId: newUser.id, email: newUser.email, name: newUser.name });
 
     // Store credentials in the one-time store keyed by a random token. The
     // plaintext password is never persisted in the database or included in

@@ -9,6 +9,7 @@ import {
 } from "@/lib/userStore";
 import { updateProfileDetails } from "@/lib/db/profiles";
 import { storeOneTimeCredentials } from "@/lib/onetimeCookie";
+import { sendWelcomeEmailOnce } from "@/lib/welcomeEmail";
 
 const PHONE_REGEX = /^[+\d][\d\s()\-]{7,}$/;
 
@@ -150,6 +151,8 @@ export async function POST(req: NextRequest) {
       name: newUser.name,
       email: newUser.email,
     });
+
+    await sendWelcomeEmailOnce({ userId: newUser.id, email: newUser.email, name: newUser.name });
 
     return NextResponse.json({
       message: "Account created successfully",
