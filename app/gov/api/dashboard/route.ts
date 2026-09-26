@@ -35,6 +35,7 @@ export async function GET(req: Request): Promise<NextResponse> {
     window,
     stateCode: stateCode || null,
     districtCode: districtCode || null,
+    officerId: officer.id,
   });
 
   return NextResponse.json(metrics);

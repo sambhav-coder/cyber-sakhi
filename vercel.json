@@ -7,6 +7,10 @@
     {
       "path": "/api/news/refresh",
       "schedule": "0 5 * * *"
+    },
+    {
+      "path": "/api/internal/external-intelligence/sync",
+      "schedule": "*/30 * * * *"
     }
   ]
 }

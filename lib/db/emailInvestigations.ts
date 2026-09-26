@@ -83,6 +83,27 @@ export async function getEmailInvestigationForUser(
   return data as EmailInvestigationRow | null;
 }
 
+/** Finds a prior investigation for the same external message (dedup hook). */
+export async function getInvestigationByExternalMessage(
+  userId: string,
+  source: string,
+  externalMessageId: string,
+): Promise<EmailInvestigationRow | null> {
+  const { data, error } = await getSupabaseServer()
+    .from("email_investigations")
+    .select("*")
+    .eq("created_by", userId)
+    .eq("source", source)
+    .eq("external_message_id", externalMessageId)
+    .order("created_at", { ascending: false })
+    .limit(1)
+    .maybeSingle();
+
+  if (error && error.code === "PGRST116") return null;
+  throwIfError(error, "Failed to retrieve analysis.");
+  return data as EmailInvestigationRow | null;
+}
+
 /** Deletes one history entry. Its indicators go with it (FK cascade). */
 export async function deleteEmailInvestigationForUser(
   id: string,

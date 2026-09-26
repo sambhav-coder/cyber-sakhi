@@ -21,6 +21,10 @@ import {
   LogOut,
   UserRound,
   MapPinned,
+  Database,
+  Globe,
+  Cpu,
+  ShieldCheck,
 } from "lucide-react";
 import { CyberSakhiLogo } from "@/components/CyberSakhiLogo";
 import { clsx } from "clsx";
@@ -68,12 +72,16 @@ const NAV_SECTIONS: NavSection[] = [
       { href: "/gov/dashboard", icon: LayoutDashboard, label: "Overview", permission: null },
       { href: "/gov/cases", icon: FolderSearch, label: "Case Explorer", permission: "case.view_meta" },
       { href: "/gov/queue", icon: ListChecks, label: "Investigation Queue", permission: "case.view_meta" },
+      { href: "/gov/my-cases", icon: UserRound, label: "My Assigned Cases", permission: "case.view_meta" },
     ],
   },
   {
     label: "Intelligence",
     items: [
       { href: "/gov/indicators", icon: Radar, label: "Indicator Intelligence", permission: "indicator.view" },
+      { href: "/gov/external", icon: Globe, label: "External Intelligence", permission: "indicator.view" },
+      { href: "/gov/ml", icon: Cpu, label: "ML Intelligence", permission: null },
+      { href: "/gov/sources", icon: Database, label: "Data Sources", permission: null },
       { href: "/gov/geography", icon: MapPin, label: "Map", permission: "geo.view" },
     ],
   },
@@ -85,7 +93,8 @@ const NAV_SECTIONS: NavSection[] = [
       { href: "/gov/reports", icon: FileBarChart2, label: "Reports", permission: "report.generate" },
       { href: "/gov/audit", icon: ScrollText, label: "Audit Logs", permission: "audit.view" },
       { href: "/gov/mfa", icon: KeyRound, label: "Authenticator (MFA)", permission: null },
-      { href: "#", icon: Settings2, label: "Administration", permission: "officer.view" },
+      { href: "/gov/access", icon: ShieldCheck, label: "Access and Scope", permission: null },
+      { href: "/gov/admin", icon: Settings2, label: "Administration", permission: "officer.view" },
     ],
   },
 ];

@@ -39,6 +39,9 @@ interface EnrichedGmailMessage {
   to?: string | null;
   subject?: string | null;
   date?: string | null;
+  isDemo?: boolean;
+  forensicType?: string;
+  description?: string;
 }
 
 /* ------------------------------------------------------------------ *
@@ -263,6 +266,7 @@ export default function GmailForensicsPage() {
   const [error, setError] = useState<string | null>(null);
   const [isConnected, setIsConnected] = useState<boolean | null>(null);
   const [analyzingId, setAnalyzingId] = useState<string | null>(null);
+  const [isDemoMode, setIsDemoMode] = useState<boolean>(false);
 
   const [mounted, setMounted] = useState(false);
 
@@ -344,10 +348,26 @@ export default function GmailForensicsPage() {
     setError(null);
 
     try {
-      const response = await fetch("/api/gmail/messages", {
+      // Check if this is the SIH Demo account and use demo mailbox
+      const demoStatusResponse = await fetch("/api/demo/status", {
         method: "GET",
         cache: "no-store",
       });
+
+      let isDemo = false;
+      if (demoStatusResponse.ok) {
+        const demoData = await demoStatusResponse.json();
+        isDemo = demoData.isDemo;
+        setIsDemoMode(isDemo);
+      }
+
+      const response = await fetch(
+        isDemo ? "/api/demo/mailbox" : "/api/gmail/messages",
+        {
+          method: "GET",
+          cache: "no-store",
+        }
+      );
 
       const data = (await response.json()) as
         | GmailListResponse
@@ -361,6 +381,8 @@ export default function GmailForensicsPage() {
         setError(
           isGmailErrorResponse(data) && data.error
             ? data.error
+            : isDemo
+            ? "Unable to load demo mailbox. Please try again."
             : "Unable to load Gmail messages. Please connect Gmail first."
         );
 
@@ -384,25 +406,65 @@ export default function GmailForensicsPage() {
       });
     } catch {
       setError(
-        "Unable to connect to Cyber Sakhi Gmail service. Please try again."
+        isDemoMode
+          ? "Unable to connect to Cyber Sakhi demo mailbox. Please try again."
+          : "Unable to connect to Cyber Sakhi Gmail service. Please try again."
       );
       setIsConnected(false);
       setMessages([]);
     } finally {
       setIsLoading(false);
     }
-  }, [session?.user?.id]);
+  }, [session?.user?.id, isDemoMode]);
 
   useEffect(() => {
     if (sessionStatus === "authenticated" && session?.user?.id) {
       loadMessages();
     }
-  }, [loadMessages, sessionStatus, session?.user?.id]);
+  }, [loadMessages, sessionStatus, session?.user?.id, isDemoMode]);
 
   // Quick-scan every listed message that has no cached result yet, newest
   // first, in small batches so colours fill in progressively.
   useEffect(() => {
     if (!isConnected || !currentUserId || messages.length === 0) return;
+    
+    // Skip quick scan for demo mode - demo emails have pre-configured forensic types
+    if (isDemoMode) {
+      // Set demo-specific scan results based on forensic types
+      const demoScanResults: Record<string, QuickScan> = {};
+      messages.forEach(email => {
+        if (email.forensicType) {
+          const severityMap: Record<string, Severity> = {
+            normal: "SAFE",
+            phishing: "CRITICAL",
+            spoofed: "HIGH",
+            suspicious: "MEDIUM",
+            "spf-dkim-dmarc": "LOW",
+            "threat-indicators": "HIGH",
+            "smtp-relay": "MEDIUM"
+          };
+          const scoreMap: Record<string, number> = {
+            normal: 15,
+            phishing: 95,
+            spoofed: 78,
+            suspicious: 62,
+            "spf-dkim-dmarc": 25,
+            "threat-indicators": 85,
+            "smtp-relay": 55
+          };
+          demoScanResults[email.id] = {
+            level: severityMap[email.forensicType] || "LOW",
+            score: scoreMap[email.forensicType] || 50,
+            reason: `Demo: ${email.forensicType} sample`
+          };
+        }
+      });
+      scanResultsRef.current = demoScanResults;
+      setScanResults(demoScanResults);
+      setScanState({ running: false, done: messages.length, total: messages.length, error: null });
+      return;
+    }
+    
     const all = messages.map((m) => m.id);
     const pending = all.filter((id) => !scanResultsRef.current[id]);
     if (pending.length === 0) {
@@ -465,7 +527,7 @@ export default function GmailForensicsPage() {
         setScanState({ running: false, done: all.length, total: all.length, error: null });
       }
     })();
-  }, [messages, isConnected, currentUserId]);
+  }, [messages, isConnected, currentUserId, isDemoMode]);
 
   const severityCounts = useMemo(() => {
     const counts: Record<Severity, number> = { CRITICAL: 0, HIGH: 0, MEDIUM: 0, LOW: 0, SAFE: 0 };
@@ -511,7 +573,9 @@ export default function GmailForensicsPage() {
 
     try {
       const response = await fetch(
-        `/api/gmail/analyze/${encodeURIComponent(messageId)}`,
+        isDemoMode
+          ? `/api/demo/analyze/${encodeURIComponent(messageId)}`
+          : `/api/gmail/analyze/${encodeURIComponent(messageId)}`,
         {
           method: "GET",
           cache: "no-store",
@@ -521,7 +585,12 @@ export default function GmailForensicsPage() {
       const payload = await response.json();
 
       if (!response.ok) {
-        setError(payload.error || "Unable to analyze this Gmail message.");
+        setError(
+          payload.error ||
+            (isDemoMode
+              ? "Unable to analyze this demo email."
+              : "Unable to analyze this Gmail message.")
+        );
         return;
       }
 
@@ -531,12 +600,19 @@ export default function GmailForensicsPage() {
           analysis: payload.analysis,
           historyId: payload.historyId,
           historySaveError: payload.historySaveError,
+          case: payload.case,
+          caseSaveError: payload.caseSaveError,
+          isDemo: isDemoMode,
         })
       );
 
       window.location.href = "/email-forensics";
     } catch {
-      setError("Network error while analyzing the Gmail message.");
+      setError(
+        isDemoMode
+          ? "Network error while analyzing the demo email."
+          : "Network error while analyzing the Gmail message."
+      );
     } finally {
       setAnalyzingId(null);
     }
@@ -648,16 +724,18 @@ export default function GmailForensicsPage() {
 
               <div className="inline-flex items-center gap-2 rounded-full border border-emergency-500/30 bg-emergency-950/50 px-3 py-1 text-[11px] font-semibold text-emergency-200 backdrop-blur-md">
                 <Mail className="h-3.5 w-3.5 text-emergency-400" />
-                <span>Gmail Investigation</span>
+                <span>{isDemoMode ? "SIH Demo Mailbox" : "Gmail Investigation"}</span>
               </div>
 
               <h1 className="text-2xl font-extrabold text-white sm:text-3xl">
-                Analyze a Suspicious Gmail Message
+                {isDemoMode ? "SIH Demo Email Forensics" : "Analyze a Suspicious Gmail Message"}
               </h1>
 
               <p className="max-w-2xl text-sm text-slate-300">
-                Select a message below and run Cyber Sakhi&apos;s email forensic
-                analysis on its real raw email source.
+                {isDemoMode
+                  ? "Explore Cyber Sakhi's email forensic analysis using sanitized demo samples. No real Gmail account required."
+                  : "Select a message below and run Cyber Sakhi's email forensic analysis on its real raw email source."
+                }
               </p>
             </div>
           </div>
@@ -674,19 +752,26 @@ export default function GmailForensicsPage() {
                   <span className="relative inline-flex h-1.5 w-1.5 rounded-full bg-emerald-400" />
                 </span>
                 <span className="text-[10px] font-bold uppercase tracking-[0.24em] text-emerald-300">
-                  Connected
+                  {isDemoMode ? "Demo Mode Active" : "Connected"}
                 </span>
               </div>
               <div className="mt-0.5 truncate text-xs font-medium text-slate-300">
-                {session?.user?.email ?? "Gmail"}
+                {isDemoMode ? "SIH Demo Mailbox — Demo data — no real Gmail account connected" : (session?.user?.email ?? "Gmail")}
               </div>
             </div>
 
             <div className="flex w-full items-center gap-2 sm:ml-auto sm:w-auto">
-              <span className="hidden sm:inline-flex items-center gap-1.5 rounded-lg border border-slate-700/70 bg-slate-900/70 px-3 py-1.5 text-[10px] font-bold uppercase tracking-widest text-slate-400">
-                <ShieldCheck className="h-3 w-3 text-emerald-400" />
-                Read-only access
-              </span>
+              {isDemoMode ? (
+                <span className="hidden sm:inline-flex items-center gap-1.5 rounded-lg border border-blue-700/50 bg-blue-950/60 px-3 py-1.5 text-[10px] font-bold uppercase tracking-widest text-blue-300">
+                  <ShieldCheck className="h-3 w-3 text-blue-400" />
+                  Read-only demonstration
+                </span>
+              ) : (
+                <span className="hidden sm:inline-flex items-center gap-1.5 rounded-lg border border-slate-700/70 bg-slate-900/70 px-3 py-1.5 text-[10px] font-bold uppercase tracking-widest text-slate-400">
+                  <ShieldCheck className="h-3 w-3 text-emerald-400" />
+                  Read-only access
+                </span>
+              )}
               <button
                 type="button"
                 onClick={loadMessages}
@@ -698,14 +783,16 @@ export default function GmailForensicsPage() {
                 />
                 Refresh
               </button>
-              <button
-                type="button"
-                onClick={handleDisconnectGmail}
-                className="inline-flex items-center gap-2 rounded-lg border border-red-700/50 bg-red-950/80 px-3.5 py-1.5 text-xs font-bold text-red-300 transition hover:bg-red-900/70"
-              >
-                <ShieldAlert className="h-3.5 w-3.5" />
-                Disconnect Gmail
-              </button>
+              {!isDemoMode && (
+                <button
+                  type="button"
+                  onClick={handleDisconnectGmail}
+                  className="inline-flex items-center gap-2 rounded-lg border border-red-700/50 bg-red-950/80 px-3.5 py-1.5 text-xs font-bold text-red-300 transition hover:bg-red-900/70"
+                >
+                  <ShieldAlert className="h-3.5 w-3.5" />
+                  Disconnect Gmail
+                </button>
+              )}
             </div>
           </div>
 
@@ -718,167 +805,120 @@ export default function GmailForensicsPage() {
         </>
       ) : (
         <>
-          {/* ============ CINEMATIC GMAIL CONNECT HERO ============ */}
-          <section className="relative overflow-hidden">
-            <div aria-hidden className="pointer-events-none absolute inset-0 -z-10">
-              <div
-                className="absolute inset-0"
-                style={{
-                  backgroundImage:
-                    "linear-gradient(rgba(239,68,68,0.05) 1px, transparent 1px), linear-gradient(90deg, rgba(239,68,68,0.05) 1px, transparent 1px)",
-                  backgroundSize: "44px 44px",
-                  maskImage:
-                    "radial-gradient(ellipse 75% 70% at 50% 10%, black 30%, transparent 80%)",
-                  WebkitMaskImage:
-                    "radial-gradient(ellipse 75% 70% at 50% 10%, black 30%, transparent 80%)",
-                }}
-              />
-              <div
-                className="absolute left-1/2 -top-32 -translate-x-1/2 w-[640px] h-[380px] rounded-full"
-                style={{
-                  background:
-                    "radial-gradient(circle, rgba(185,28,28,0.26) 0%, rgba(185,28,28,0.06) 45%, transparent 72%)",
-                  filter: "blur(36px)",
-                }}
-              />
-              <div
-                className="absolute -left-24 top-1/3 w-[420px] h-[280px] rounded-full"
-                style={{
-                  background:
-                    "radial-gradient(circle, rgba(51,65,85,0.5) 0%, transparent 70%)",
-                  filter: "blur(40px)",
-                }}
-              />
-            </div>
-
-            <div className="hero-scanline" aria-hidden />
-
-            <span
-              aria-hidden
-              className="pointer-events-none absolute left-3 top-3 h-7 w-7 rounded-tl-xl border-l-2 border-t-2 border-emergency-500/30"
-            />
-            <span
-              aria-hidden
-              className="pointer-events-none absolute right-3 top-3 h-7 w-7 rounded-tr-xl border-r-2 border-t-2 border-emergency-500/30"
-            />
-
-            <div className="relative z-10 mx-auto max-w-4xl px-4 py-10 sm:py-14">
-              <Link
-                href="/email-forensics"
-                className={`inline-flex items-center gap-2 text-xs font-medium text-slate-400 transition-opacity duration-700 hover:text-white ${
-                  mounted ? "opacity-100" : "opacity-0"
-                } motion-reduce:transition-none`}
-              >
-                <ArrowLeft className="h-4 w-4" />
-                Back to Email Forensics
-              </Link>
-
-              <div
-                className={`mt-8 flex items-center gap-4 transition-all duration-1000 ease-out ${
-                  mounted ? "opacity-100 translate-y-0" : "opacity-0 translate-y-6"
-                } motion-reduce:opacity-100 motion-reduce:translate-y-0`}
-                style={{ transitionDelay: "60ms" }}
-              >
-                <span className="inline-flex h-14 w-14 shrink-0 items-center justify-center rounded-2xl border border-slate-700/80 bg-[#0b0b17]/90 p-2.5 backdrop-blur-md shadow-lg shadow-emergency-950/30">
-                  <GmailLogo className="h-full w-full" />
-                </span>
-                <EyebrowBadge icon={Mail}>
-                  <span>Live Gmail Integration</span>
-                </EyebrowBadge>
-              </div>
-
-              <div
-                className={`mt-5 transition-all duration-1000 ease-out ${
-                  mounted ? "opacity-100 translate-y-0" : "opacity-0 translate-y-6"
-                } motion-reduce:opacity-100 motion-reduce:translate-y-0`}
-                style={{ transitionDelay: "160ms" }}
-              >
+          {/* ============ DEMO MODE VS GMAIL CONNECT HERO ============ */}
+          {isDemoMode ? (
+            <section className="relative overflow-hidden">
+              <div aria-hidden className="pointer-events-none absolute inset-0 -z-10">
                 <div
-                  role="status"
-                  className="inline-flex items-center gap-2 rounded-full border border-emergency-500/25 bg-emergency-950/50 px-3 py-1 backdrop-blur-md"
+                  className="absolute inset-0"
+                  style={{
+                    backgroundImage:
+                      "linear-gradient(rgba(59,130,246,0.05) 1px, transparent 1px), linear-gradient(90deg, rgba(59,130,246,0.05) 1px, transparent 1px)",
+                    backgroundSize: "44px 44px",
+                    maskImage:
+                      "radial-gradient(ellipse 75% 70% at 50% 10%, black 30%, transparent 80%)",
+                    WebkitMaskImage:
+                      "radial-gradient(ellipse 75% 70% at 50% 10%, black 30%, transparent 80%)",
+                  }}
+                />
+                <div
+                  className="absolute left-1/2 -top-32 -translate-x-1/2 w-[640px] h-[380px] rounded-full"
+                  style={{
+                    background:
+                      "radial-gradient(circle, rgba(59,130,246,0.26) 0%, rgba(59,130,246,0.06) 45%, transparent 72%)",
+                    filter: "blur(36px)",
+                  }}
+                />
+              </div>
+
+              <div className="hero-scanline" aria-hidden />
+
+              <div className="relative z-10 mx-auto max-w-4xl px-4 py-10 sm:py-14">
+                <Link
+                  href="/email-forensics"
+                  className="inline-flex items-center gap-2 text-xs font-medium text-slate-400 transition-opacity duration-700 hover:text-white"
                 >
-                  {isConnected === null ? (
-                    <Loader2 className="h-3 w-3 animate-spin text-emergency-400 motion-reduce:animate-none" />
-                  ) : (
-                    <span className="relative flex h-1.5 w-1.5">
-                      <span className="absolute inline-flex h-full w-full animate-ping rounded-full bg-emergency-400 opacity-75 motion-reduce:animate-none" />
-                      <span className="relative inline-flex h-1.5 w-1.5 rounded-full bg-emergency-500" />
-                    </span>
-                  )}
-                  <span className="text-[10px] font-bold uppercase tracking-[0.28em] text-emergency-200">
-                    {isConnected === null
-                      ? "Checking Connection"
-                      : "Not Connected"}
+                  <ArrowLeft className="h-4 w-4" />
+                  Back to Email Forensics
+                </Link>
+
+                <div className="mt-8 flex items-center gap-4">
+                  <span className="inline-flex h-14 w-14 shrink-0 items-center justify-center rounded-2xl border border-blue-700/80 bg-[#0b0b17]/90 p-2.5 backdrop-blur-md shadow-lg shadow-blue-950/30">
+                    <GmailLogo className="h-full w-full" />
                   </span>
+                  <EyebrowBadge icon={Mail}>
+                    <span>SIH Demo Mailbox</span>
+                  </EyebrowBadge>
                 </div>
-              </div>
 
-              <h1
-                className={`mt-6 transition-all duration-1000 ease-out ${
-                  mounted ? "opacity-100 translate-y-0" : "opacity-0 translate-y-6"
-                } motion-reduce:opacity-100 motion-reduce:translate-y-0`}
-                style={{ transitionDelay: "260ms" }}
-              >
-                <span className="tracking-tight text-white font-black text-4xl sm:text-5xl md:text-6xl">
-                  Connect <span className="text-crimson-gradient">Gmail</span>
-                </span>
-              </h1>
+                <div className="mt-5">
+                  <div
+                    role="status"
+                    className="inline-flex items-center gap-2 rounded-full border border-blue-500/25 bg-blue-950/50 px-3 py-1 backdrop-blur-md"
+                  >
+                    <span className="relative flex h-1.5 w-1.5">
+                      <span className="absolute inline-flex h-full w-full animate-ping rounded-full bg-blue-400 opacity-75 motion-reduce:animate-none" />
+                      <span className="relative inline-flex h-1.5 w-1.5 rounded-full bg-blue-500" />
+                    </span>
+                    <span className="text-[10px] font-bold uppercase tracking-[0.28em] text-blue-200">
+                      Demo Mode Active
+                    </span>
+                  </div>
+                </div>
 
-              <div
-                className={`transition-all duration-1000 ease-out ${
-                  mounted ? "opacity-100 translate-y-0" : "opacity-0 translate-y-6"
-                } motion-reduce:opacity-100 motion-reduce:translate-y-0`}
-                style={{ transitionDelay: "380ms" }}
-              >
-                <p className="mt-5 max-w-2xl text-sm font-light leading-relaxed tracking-wide text-slate-200 sm:text-base">
-                  Connecting Gmail lets Cyber Sakhi inspect suspicious messages
-                  directly — fetching real raw email sources from your inbox for
-                  full forensic analysis.
-                </p>
-                <p className="mt-2 max-w-2xl text-xs leading-relaxed text-slate-400">
-                  Works through the existing Cyber Sakhi Gmail integration. No
-                  sending, no editing, no deleting — inspection only.
-                </p>
-              </div>
+                <h1 className="mt-6">
+                  <span className="tracking-tight text-white font-black text-4xl sm:text-5xl md:text-6xl">
+                    SIH Demo <span className="text-blue-gradient">Email Forensics</span>
+                  </span>
+                </h1>
 
-              <div
-                className={`transition-all duration-1000 ease-out ${
-                  mounted ? "opacity-100 translate-y-0" : "opacity-0 translate-y-6"
-                } motion-reduce:opacity-100 motion-reduce:translate-y-0`}
-                style={{ transitionDelay: "500ms" }}
-              >
-                <div className="mt-8 max-w-2xl rounded-2xl border border-slate-800/90 bg-[#0b0b17]/80 p-5 backdrop-blur-xl sm:p-6">
+                <div className="mt-5">
+                  <p className="max-w-2xl text-sm font-light leading-relaxed tracking-wide text-slate-200 sm:text-base">
+                    Explore Cyber Sakhi's email forensic analysis using sanitized demo samples.
+                    No real Gmail account required — perfect for SIH judges and demonstrations.
+                  </p>
+                  <p className="mt-2 max-w-2xl text-xs leading-relaxed text-slate-400">
+                    Demo mailbox contains preloaded forensic samples including phishing attempts, spoofed emails,
+                    SPF/DKIM/DMARC analysis, and threat indicators. All data is clearly marked as demonstration content.
+                  </p>
+                </div>
+
+                <div className="mt-8 max-w-2xl rounded-2xl border border-blue-800/90 bg-[#0b0b17]/80 p-5 backdrop-blur-xl sm:p-6">
                   <div className="flex flex-col gap-5 sm:flex-row sm:items-center sm:justify-between">
                     <div className="flex items-start gap-3 min-w-0">
-                      <span className="inline-flex h-10 w-10 shrink-0 items-center justify-center rounded-xl border border-emergency-700/50 bg-emergency-950/60">
-                        <ShieldCheck className="h-5 w-5 text-emergency-300" />
+                      <span className="inline-flex h-10 w-10 shrink-0 items-center justify-center rounded-xl border border-blue-700/50 bg-blue-950/60">
+                        <ShieldCheck className="h-5 w-5 text-blue-300" />
                       </span>
                       <div className="min-w-0">
                         <div className="text-sm font-bold text-white">
-                          Authorize read-only forensic access
+                          Demo mailbox ready to use
                         </div>
                         <div className="mt-1 text-[11px] leading-relaxed text-slate-400">
-                          You&apos;ll be redirected to Google to securely grant
-                          Cyber Sakhi read-only access to your Gmail.
+                          The SIH Demo account has automatic access to the demo mailbox with preloaded forensic samples.
+                          No Google OAuth required.
                         </div>
                       </div>
                     </div>
 
                     <button
                       type="button"
-                      onClick={handleConnectGmail}
-                      disabled={isConnected === null}
+                      onClick={loadMessages}
+                      disabled={isLoading}
                       className="btn-emergency w-full shrink-0 sm:w-auto"
+                      style={{
+                        background: "linear-gradient(135deg, #3b82f6 0%, #2563eb 50%, #1d4ed8 100%)",
+                        boxShadow: "0 15px 40px -12px rgba(59, 130, 246, 0.5), inset 0 1px 0 rgba(255,255,255,0.18)",
+                      }}
                     >
-                      {isConnected === null ? (
+                      {isLoading ? (
                         <>
                           <Loader2 className="h-4 w-4 animate-spin" />
-                          <span>Checking connection…</span>
+                          <span>Loading demo mailbox…</span>
                         </>
                       ) : (
                         <>
                           <ShieldCheck className="h-4 w-4" />
-                          <span>Connect Gmail</span>
+                          <span>Open Demo Mailbox</span>
                         </>
                       )}
                     </button>
@@ -897,21 +937,215 @@ export default function GmailForensicsPage() {
                   <ul className="mt-5 grid gap-2 border-t border-slate-800/70 pt-4 text-[11px] text-slate-400 sm:grid-cols-3">
                     <li className="flex items-center gap-2">
                       <CheckCircle2 className="h-3.5 w-3.5 shrink-0 text-emerald-400" />
-                      Read-only Gmail access
+                      No Google OAuth required
                     </li>
                     <li className="flex items-center gap-2">
                       <CheckCircle2 className="h-3.5 w-3.5 shrink-0 text-emerald-400" />
-                      Forensic inspection via existing integration
+                      Preloaded forensic samples
                     </li>
                     <li className="flex items-center gap-2">
                       <CheckCircle2 className="h-3.5 w-3.5 shrink-0 text-emerald-400" />
-                      Secure OAuth — token stored encrypted
+                      Clearly marked demo data
                     </li>
                   </ul>
                 </div>
               </div>
-            </div>
-          </section>
+            </section>
+          ) : (
+            <section className="relative overflow-hidden">
+              <div aria-hidden className="pointer-events-none absolute inset-0 -z-10">
+                <div
+                  className="absolute inset-0"
+                  style={{
+                    backgroundImage:
+                      "linear-gradient(rgba(239,68,68,0.05) 1px, transparent 1px), linear-gradient(90deg, rgba(239,68,68,0.05) 1px, transparent 1px)",
+                    backgroundSize: "44px 44px",
+                    maskImage:
+                      "radial-gradient(ellipse 75% 70% at 50% 10%, black 30%, transparent 80%)",
+                    WebkitMaskImage:
+                      "radial-gradient(ellipse 75% 70% at 50% 10%, black 30%, transparent 80%)",
+                  }}
+                />
+                <div
+                  className="absolute left-1/2 -top-32 -translate-x-1/2 w-[640px] h-[380px] rounded-full"
+                  style={{
+                    background:
+                      "radial-gradient(circle, rgba(185,28,28,0.26) 0%, rgba(185,28,28,0.06) 45%, transparent 72%)",
+                    filter: "blur(36px)",
+                  }}
+                />
+                <div
+                  className="absolute -left-24 top-1/3 w-[420px] h-[280px] rounded-full"
+                  style={{
+                    background:
+                      "radial-gradient(circle, rgba(51,65,85,0.5) 0%, transparent 70%)",
+                    filter: "blur(40px)",
+                  }}
+                />
+              </div>
+
+              <div className="hero-scanline" aria-hidden />
+
+              <span
+                aria-hidden
+                className="pointer-events-none absolute left-3 top-3 h-7 w-7 rounded-tl-xl border-l-2 border-t-2 border-emergency-500/30"
+              />
+              <span
+                aria-hidden
+                className="pointer-events-none absolute right-3 top-3 h-7 w-7 rounded-tr-xl border-r-2 border-t-2 border-emergency-500/30"
+              />
+
+              <div className="relative z-10 mx-auto max-w-4xl px-4 py-10 sm:py-14">
+                <Link
+                  href="/email-forensics"
+                  className={`inline-flex items-center gap-2 text-xs font-medium text-slate-400 transition-opacity duration-700 hover:text-white ${
+                    mounted ? "opacity-100" : "opacity-0"
+                  } motion-reduce:transition-none`}
+                >
+                  <ArrowLeft className="h-4 w-4" />
+                  Back to Email Forensics
+                </Link>
+
+                <div
+                  className={`mt-8 flex items-center gap-4 transition-all duration-1000 ease-out ${
+                    mounted ? "opacity-100 translate-y-0" : "opacity-0 translate-y-6"
+                  } motion-reduce:opacity-100 motion-reduce:translate-y-0`}
+                  style={{ transitionDelay: "60ms" }}
+                >
+                  <span className="inline-flex h-14 w-14 shrink-0 items-center justify-center rounded-2xl border border-slate-700/80 bg-[#0b0b17]/90 p-2.5 backdrop-blur-md shadow-lg shadow-emergency-950/30">
+                    <GmailLogo className="h-full w-full" />
+                  </span>
+                  <EyebrowBadge icon={Mail}>
+                    <span>Live Gmail Integration</span>
+                  </EyebrowBadge>
+                </div>
+
+                <div
+                  className={`mt-5 transition-all duration-1000 ease-out ${
+                    mounted ? "opacity-100 translate-y-0" : "opacity-0 translate-y-6"
+                  } motion-reduce:opacity-100 motion-reduce:translate-y-0`}
+                  style={{ transitionDelay: "160ms" }}
+                >
+                  <div
+                    role="status"
+                    className="inline-flex items-center gap-2 rounded-full border border-emergency-500/25 bg-emergency-950/50 px-3 py-1 backdrop-blur-md"
+                  >
+                    {isConnected === null ? (
+                      <Loader2 className="h-3 w-3 animate-spin text-emergency-400 motion-reduce:animate-none" />
+                    ) : (
+                      <span className="relative flex h-1.5 w-1.5">
+                        <span className="absolute inline-flex h-full w-full animate-ping rounded-full bg-emergency-400 opacity-75 motion-reduce:animate-none" />
+                        <span className="relative inline-flex h-1.5 w-1.5 rounded-full bg-emergency-500" />
+                      </span>
+                    )}
+                    <span className="text-[10px] font-bold uppercase tracking-[0.28em] text-emergency-200">
+                      {isConnected === null
+                        ? "Checking Connection"
+                        : "Not Connected"}
+                    </span>
+                  </div>
+                </div>
+
+                <h1
+                  className={`mt-6 transition-all duration-1000 ease-out ${
+                    mounted ? "opacity-100 translate-y-0" : "opacity-0 translate-y-6"
+                  } motion-reduce:opacity-100 motion-reduce:translate-y-0`}
+                  style={{ transitionDelay: "260ms" }}
+                >
+                  <span className="tracking-tight text-white font-black text-4xl sm:text-5xl md:text-6xl">
+                    Connect <span className="text-crimson-gradient">Gmail</span>
+                  </span>
+                </h1>
+
+                <div
+                  className={`transition-all duration-1000 ease-out ${
+                    mounted ? "opacity-100 translate-y-0" : "opacity-0 translate-y-6"
+                  } motion-reduce:opacity-100 motion-reduce:translate-y-0`}
+                  style={{ transitionDelay: "380ms" }}
+                >
+                  <p className="mt-5 max-w-2xl text-sm font-light leading-relaxed tracking-wide text-slate-200 sm:text-base">
+                    Connecting Gmail lets Cyber Sakhi inspect suspicious messages
+                    directly — fetching real raw email sources from your inbox for
+                    full forensic analysis.
+                  </p>
+                  <p className="mt-2 max-w-2xl text-xs leading-relaxed text-slate-400">
+                    Works through the existing Cyber Sakhi Gmail integration. No
+                    sending, no editing, no deleting — inspection only.
+                  </p>
+                </div>
+
+                <div
+                  className={`transition-all duration-1000 ease-out ${
+                    mounted ? "opacity-100 translate-y-0" : "opacity-0 translate-y-6"
+                  } motion-reduce:opacity-100 motion-reduce:translate-y-0`}
+                  style={{ transitionDelay: "500ms" }}
+                >
+                  <div className="mt-8 max-w-2xl rounded-2xl border border-slate-800/90 bg-[#0b0b17]/80 p-5 backdrop-blur-xl sm:p-6">
+                    <div className="flex flex-col gap-5 sm:flex-row sm:items-center sm:justify-between">
+                      <div className="flex items-start gap-3 min-w-0">
+                        <span className="inline-flex h-10 w-10 shrink-0 items-center justify-center rounded-xl border border-emergency-700/50 bg-emergency-950/60">
+                          <ShieldCheck className="h-5 w-5 text-emergency-300" />
+                        </span>
+                        <div className="min-w-0">
+                          <div className="text-sm font-bold text-white">
+                            Authorize read-only forensic access
+                          </div>
+                          <div className="mt-1 text-[11px] leading-relaxed text-slate-400">
+                            You&apos;ll be redirected to Google to securely grant
+                            Cyber Sakhi read-only access to your Gmail.
+                          </div>
+                        </div>
+                      </div>
+
+                      <button
+                        type="button"
+                        onClick={handleConnectGmail}
+                        disabled={isConnected === null}
+                        className="btn-emergency w-full shrink-0 sm:w-auto"
+                      >
+                        {isConnected === null ? (
+                          <>
+                            <Loader2 className="h-4 w-4 animate-spin" />
+                            <span>Checking connection…</span>
+                          </>
+                        ) : (
+                          <>
+                            <ShieldCheck className="h-4 w-4" />
+                            <span>Connect Gmail</span>
+                          </>
+                        )}
+                      </button>
+                    </div>
+
+                    {error && (
+                      <div
+                        role="alert"
+                        className="mt-4 flex items-start gap-2 rounded-xl border border-red-500/50 bg-red-950/80 p-3 text-xs text-red-200"
+                      >
+                        <AlertCircle className="h-4 w-4 shrink-0 text-red-400" />
+                        <span className="min-w-0 break-words">{error}</span>
+                      </div>
+                    )}
+
+                    <ul className="mt-5 grid gap-2 border-t border-slate-800/70 pt-4 text-[11px] text-slate-400 sm:grid-cols-3">
+                      <li className="flex items-center gap-2">
+                        <CheckCircle2 className="h-3.5 w-3.5 shrink-0 text-emerald-400" />
+                        Read-only Gmail access
+                      </li>
+                      <li className="flex items-center gap-2">
+                        <CheckCircle2 className="h-3.5 w-3.5 shrink-0 text-emerald-400" />
+                        Forensic inspection via existing integration
+                      </li>
+                      <li className="flex items-center gap-2">
+                        <CheckCircle2 className="h-3.5 w-3.5 shrink-0 text-emerald-400" />
+                        Secure OAuth — token stored encrypted
+                      </li>
+                    </ul>
+                  </div>
+                </div>
+              </div>
+            </section>
+          )}
         </>
       )}
 
@@ -1194,17 +1428,30 @@ export default function GmailForensicsPage() {
                   ) : null}
                 </div>
                 <div className="flex items-center gap-3">
-                  <span className="inline-flex items-center gap-1.5 rounded-full border border-emergency-500/25 bg-emergency-950/50 px-2.5 py-1">
+                  <span className={`inline-flex items-center gap-1.5 rounded-full border px-2.5 py-1 ${
+                    isDemoMode 
+                      ? "border-blue-500/25 bg-blue-950/50" 
+                      : "border-emergency-500/25 bg-emergency-950/50"
+                  }`}>
                     <span className="relative flex h-1 w-1">
-                      <span className="absolute inline-flex h-full w-full animate-ping rounded-full bg-emergency-400 opacity-75 motion-reduce:animate-none" />
-                      <span className="relative inline-flex h-1 w-1 rounded-full bg-emergency-500" />
+                      <span className={`absolute inline-flex h-full w-full animate-ping rounded-full motion-reduce:animate-none ${
+                        isDemoMode ? "bg-blue-400" : "bg-emergency-400"
+                      } opacity-75`} />
+                      <span className={`relative inline-flex h-1 w-1 rounded-full ${
+                        isDemoMode ? "bg-blue-500" : "bg-emergency-500"
+                      }`} />
                     </span>
-                    <span className="text-[9px] font-bold uppercase tracking-[0.22em] text-emergency-200">
-                      Live Investigation
+                    <span className={`text-[9px] font-bold uppercase tracking-[0.22em] ${
+                      isDemoMode ? "text-blue-200" : "text-emergency-200"
+                    }`}>
+                      {isDemoMode ? "Demo Mailbox" : "Live Investigation"}
                     </span>
                   </span>
                   <span className="text-[10px] font-mono text-slate-500">
-                    {messages.length} in the last {windowDays} days · read-only forensic access
+                    {isDemoMode 
+                      ? `${messages.length} demo messages · demonstration data`
+                      : `${messages.length} in the last ${windowDays} days · read-only forensic access`
+                    }
                   </span>
                 </div>
               </div>
@@ -1321,6 +1568,8 @@ export default function GmailForensicsPage() {
                         ? "No starred messages yet"
                         : sidebarFolder.startsWith("CATEGORY_")
                         ? "No messages in this category"
+                        : isDemoMode
+                        ? "No demo messages in this folder"
                         : "No messages to display"}
                     </div>
                     <div className="text-xs text-slate-500 max-w-sm">
@@ -1328,6 +1577,8 @@ export default function GmailForensicsPage() {
                         ? "Try clearing the search box or broadening your terms."
                         : messages.length > 0
                         ? "Try a different folder on the left, or refresh your inbox."
+                        : isDemoMode
+                        ? "Try a different folder on the left, or refresh the demo mailbox."
                         : "If you just connected Gmail, click Refresh above to pull the latest messages."}
                     </div>
                   </div>
@@ -1646,10 +1897,20 @@ export default function GmailForensicsPage() {
       )}
 
       <div className="p-4 rounded-xl bg-slate-950/70 border border-slate-800 text-[11px] text-slate-500 leading-5">
-        Cyber Sakhi requests Gmail access only for the forensic workflow. The
-        integration uses read-only Gmail access and does not send, modify, or
-        delete messages. All analysis runs locally against the raw email
-        source fetched from your account.
+        {isDemoMode ? (
+          <>
+            <strong className="text-blue-300">SIH Demo Mode:</strong> This demo mailbox contains
+            sanitized sample emails for forensic demonstration. No real Gmail account is connected.
+            All data is clearly marked as demonstration content and does not represent real threats or victims.
+          </>
+        ) : (
+          <>
+            Cyber Sakhi requests Gmail access only for the forensic workflow. The
+            integration uses read-only Gmail access and does not send, modify, or
+            delete messages. All analysis runs locally against the raw email
+            source fetched from your account.
+          </>
+        )}
       </div>
     </div>
   );

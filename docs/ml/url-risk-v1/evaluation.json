@@ -1,0 +1,21 @@
+{
+  "accuracy": 0.999,
+  "precision_malicious": 1.0,
+  "recall_malicious": 0.9979,
+  "f1_malicious": 0.999,
+  "confusion_matrix": {
+    "tn": 3000,
+    "fp": 0,
+    "fn": 6,
+    "tp": 2887
+  },
+  "test_size": 5893,
+  "note": "Scores are uncalibrated model outputs, not probabilities. No calibration performed.",
+  "ood_check": {
+    "corpus": "tweetfeed-week phishing-tagged urls (reporter labels, unseen, different distribution)",
+    "n": 185,
+    "flagged_at_0.5": 86,
+    "flag_rate": 0.4649,
+    "interpretation": "Out-of-distribution generalization probe, not accuracy. Reporter tags are noisy; misses do not prove legitimacy."
+  }
+}

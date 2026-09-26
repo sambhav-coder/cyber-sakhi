@@ -1,0 +1,17 @@
+{
+  "batch_id": "ext-20260925-manual01",
+  "watermarks": {
+    "urlhaus-csv-recent": {
+      "actual_start": "2026-08-26T00:49:17.000Z",
+      "actual_end": "2026-09-25T14:28:07.000Z"
+    },
+    "tweetfeed-week": {
+      "actual_start": "2026-09-19T00:05:54.000Z",
+      "actual_end": "2026-09-25T14:12:56.000Z"
+    },
+    "feodo-ipblocklist": {
+      "actual_start": null,
+      "actual_end": "2026-03-04T14:28:39Z (feed header; stale)"
+    }
+  }
+}

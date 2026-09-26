@@ -72,6 +72,17 @@ export async function createCase(input: {
   threatType?: string;
   status?: string;
   severity?: string;
+  /**
+   * Government-console fields. Written at creation so the scoped Overview
+   * (gov_status / risk_level / threat_category) reflects real workflow
+   * output instead of NULLs that render as Unset/Unclassified. Callers
+   * that omit them get the historical behavior: the database default
+   * applies and read paths report the value honestly as unassessed.
+   */
+  govStatus?: string;
+  riskLevel?: string | null;
+  threatCategory?: string | null;
+  caseSource?: string | null;
 }): Promise<CaseRow> {
   const severity = (input.severity || "unknown").toLowerCase();
   const status = input.status || "open";
@@ -91,6 +102,13 @@ export async function createCase(input: {
         status,
         severity,
         created_by: input.userId,
+        // Gov-console attribution: only set when the caller supplies a
+        // workflow-derived value; otherwise the column default applies and
+        // read paths surface the absence honestly (Unset/Unclassified).
+        ...(input.govStatus !== undefined ? { gov_status: input.govStatus } : {}),
+        ...(input.riskLevel !== undefined ? { risk_level: input.riskLevel } : {}),
+        ...(input.threatCategory !== undefined ? { threat_category: input.threatCategory } : {}),
+        ...(input.caseSource !== undefined ? { case_source: input.caseSource } : {}),
       })
       .select(CASE_FIELDS)
       .maybeSingle();

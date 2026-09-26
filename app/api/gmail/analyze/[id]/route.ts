@@ -151,7 +151,7 @@ export async function GET(
     }
 
     // Send the real email source into the existing forensic engine.
-    const analysis = await analyzeEmail(rawEmail);
+    const analysis = await analyzeEmail(rawEmail, { userId: session.user.id });
 
     // Save to the user's analysis history, mirroring the raw-paste flow.
     // No case is created unless the user asks for one.

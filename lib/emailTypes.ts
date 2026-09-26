@@ -388,6 +388,7 @@ import type { BecAnalysis } from "./bec/bec";
 import type { DnsAuthVerification } from "./auth";
 import type { ProxyEnrichment } from "./ipIntelligence";
 import type { ThreatIntelResult } from "./intel/dnsbl";
+import type { EnrichmentReport } from "./intel/orchestrator";
 import type { InvestigationGraph } from "./graph";
 import type { AttributionAnalysis } from "./attribution";
 import type { Alert } from "./alerts";
@@ -407,6 +408,12 @@ export interface EmailAnalysisResult {
   domainIntelligence?: DomainIntelligence;
   rdap?: RdapDomainRecord;
   threatIntel?: ThreatIntelResult;
+  /**
+   * External/internal/model threat-intel enrichment (Step I3b). Present
+   * when the enrichment stage ran; per-provider typed statuses, never
+   * merged into scores. Absent in offline mode or on stage failure.
+   */
+  externalIntel?: EnrichmentReport;
   investigationGraph?: InvestigationGraph;
   attribution?: AttributionAnalysis;
   alerts?: Alert[];

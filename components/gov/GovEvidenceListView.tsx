@@ -159,7 +159,7 @@ export function GovEvidenceListView() {
                   </Link>
                 </td>
                 <td className="p-2">
-                  {evidence.stateCode ?? "—"} / {evidence.districtCode ?? "—"}
+                  {evidence.stateCode ? `${evidence.stateCode} / ${evidence.districtCode ?? "—"}` : "Location unavailable"}
                 </td>
                 <td className="p-2">{evidence.category || "Uncategorized"}</td>
                 <td className="p-2">{formatFileSize(evidence.fileSize)}</td>

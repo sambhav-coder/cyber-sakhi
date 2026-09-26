@@ -70,6 +70,11 @@ const EXPECTED_ACTIONS = [
   "case.note_added",
   "report.generated",
   "report.exported",
+  "report.sealed",
+  "report.unsealed",
+  "report.unlock_failed",
+  "audit.exported",
+  "ml.reviewed",
 ];
 
 describe("government audit catalogue", () => {

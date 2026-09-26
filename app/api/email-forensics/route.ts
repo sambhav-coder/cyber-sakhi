@@ -32,7 +32,7 @@ export async function POST(req: NextRequest) {
       );
     }
 
-    const result = await analyzeEmail(trimmed);
+    const result = await analyzeEmail(trimmed, { userId: session.user.id });
 
     if (saveToHistory !== true) {
       return NextResponse.json(result);

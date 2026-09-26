@@ -1,0 +1,89 @@
+{
+  "requested_start": "2026-06-27T00:00:00Z",
+  "requested_end": "2026-09-25T23:59:59Z",
+  "batch_id": "ext-20260925-manual01",
+  "ingestion_time": "2026-09-25T14:46:11.773Z",
+  "sources": {
+    "urlhaus-csv-recent": {
+      "actual_start": "2026-08-26T00:49:17.000Z",
+      "actual_end": "2026-09-25T14:28:07.000Z"
+    },
+    "tweetfeed-week": {
+      "actual_start": "2026-09-19T00:05:54.000Z",
+      "actual_end": "2026-09-25T14:12:56.000Z"
+    },
+    "feodo-ipblocklist": {
+      "actual_start": null,
+      "actual_end": "2026-03-04T14:28:39Z (feed header; stale)"
+    }
+  },
+  "record_count": 15316,
+  "unique_record_count": 15316,
+  "duplicate_count": 44,
+  "duplicates_by_source": {
+    "tweetfeed-week": 43,
+    "feodo-ipblocklist": 1
+  },
+  "rejected_count": 0,
+  "by_type": {
+    "url": 14853,
+    "domain": 340,
+    "ip": 76,
+    "md5": 18,
+    "hash-sha256": 29
+  },
+  "by_source": {
+    "urlhaus-csv-recent": 14464,
+    "tweetfeed-week": 847,
+    "feodo-ipblocklist": 5
+  },
+  "by_threat": {
+    "MALWARE_DISTRIBUTION": 14464,
+    "MALWARE": 100,
+    "PHISHING": 263,
+    "RANSOMWARE": 26,
+    "APT": 28,
+    "UNSPECIFIED": 148,
+    "CLICKFIX_SOCIAL_ENGINEERING": 36,
+    "C2_INFRASTRUCTURE": 41,
+    "MALWARE_TOOLING": 9,
+    "SCAM": 7,
+    "EXPOSED_SERVICE": 4,
+    "CLEARFAKE_SOCIAL_ENGINEERING": 190
+  },
+  "by_day": {
+    "2026-09-25": 413,
+    "2026-09-24": 820,
+    "2026-09-23": 656,
+    "2026-09-22": 981,
+    "2026-09-21": 985,
+    "2026-09-20": 367,
+    "2026-09-19": 532,
+    "2026-09-18": 401,
+    "2026-09-17": 454,
+    "2026-09-16": 709,
+    "2026-09-15": 594,
+    "2026-09-14": 480,
+    "2026-09-13": 393,
+    "2026-09-12": 320,
+    "2026-09-11": 341,
+    "2026-09-10": 437,
+    "2026-09-09": 553,
+    "2026-09-08": 372,
+    "2026-09-07": 605,
+    "2026-09-06": 324,
+    "2026-09-05": 274,
+    "2026-09-04": 392,
+    "2026-09-03": 319,
+    "2026-09-02": 670,
+    "2026-09-01": 439,
+    "2026-08-31": 428,
+    "2026-08-30": 374,
+    "2026-08-29": 359,
+    "2026-08-28": 422,
+    "2026-08-27": 450,
+    "2026-08-26": 452
+  },
+  "actual_source_start": "2026-08-26",
+  "actual_source_end": "2026-09-25"
+}

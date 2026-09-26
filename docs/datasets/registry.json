@@ -1,0 +1,25 @@
+{
+  "version": 1,
+  "updated": "2026-09-25",
+  "policy": "Research datasets are staging artifacts only. They NEVER enter production case tables, counts, maps, or reports as cases. Every panel surface using them carries a RESEARCH label.",
+  "entries": [
+    {
+      "id": "uci-phishing-websites-327",
+      "dir": "docs/datasets/uci-phishing-websites-327",
+      "status": "imported-staged"
+    },
+    {
+      "id": "india-districts-census2011",
+      "dir": "docs/datasets",
+      "notes": "india-districts-census2011.md",
+      "asset": "public/geo/india-districts-census2011.geojson",
+      "status": "installed-asset"
+    },
+    {
+      "id": "ext-intel-20260925",
+      "dir": "docs/datasets/ext-intel-20260925",
+      "notes": "coverage.json + sync-health.json + sync-state.json; browsing snapshot public/data/ext-iocs-week.json",
+      "status": "imported-staged"
+    }
+  ]
+}

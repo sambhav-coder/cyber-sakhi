@@ -1,0 +1,119 @@
+{
+  "updated": "2026-09-26T00:00:00Z",
+  "note": "Live connector states. Keys live only in server .env.local and are never shown here or in the browser. Per-provider live status is authoritative at /api/intelligence/health; this registry records the last verified posture.",
+  "connectors": [
+    {
+      "id": "cyber-sakhi-production",
+      "category": "A. Cyber-Sakhi Production",
+      "status": "Live",
+      "records": "30 cases, ~700 indicators, 5 evidence (2026-09-26)",
+      "coverage": "cases 2026-09-14 → 2026-09-26",
+      "auth": "gov session + role + scope, server-side",
+      "limitation": "Most historical cases untriaged (status NEW, threat/risk/geo NULL): shown explicitly as Unclassified/Unset/Location unavailable. New email-forensics cases carry real risk/category/source."
+    },
+    {
+      "id": "urlhaus-csv-recent",
+      "category": "B. External Intelligence",
+      "status": "Connected",
+      "records": "14,464 IOCs ingested 2026-09-25",
+      "coverage": "2026-08-26 → 2026-09-25 (actual ~30 days; requested window was 90 days — partial historical coverage)",
+      "auth": "none required (public feed)",
+      "license": "abuse.ch terms of use (https://urlhaus.abuse.ch/api/)",
+      "limitation": "This slice is all malware_download; online/offline status included, no confidence scores."
+    },
+    {
+      "id": "tweetfeed-week",
+      "category": "B. External Intelligence",
+      "status": "Connected",
+      "records": "847 unique IOCs ingested 2026-09-25 (890 observed, 43 in-feed recurrences)",
+      "coverage": "2026-09-19 → 2026-09-25 (7-day rolling endpoint; retention is 7 days, not 90)",
+      "auth": "none required (public API)",
+      "limitation": "Reporter tags are noisy community labels, not verified verdicts."
+    },
+    {
+      "id": "feodo-ipblocklist",
+      "category": "B. External Intelligence",
+      "status": "Connected",
+      "records": "5 unique C2 IPs ingested 2026-09-25",
+      "coverage": "feed header last-updated 2026-03-04 (stale upstream; ingested values recorded as observed 2026-09-25 with stale-feed provenance)",
+      "auth": "none required (public feed)",
+      "license": "abuse.ch terms of use",
+      "limitation": "Upstream blocklist nearly empty and 6 months stale; kept for provenance, negligible analytic value."
+    },
+    {
+      "id": "urlhaus-v2-export",
+      "category": "D. Disconnected/Pending Sources",
+      "status": "Failed",
+      "records": "0",
+      "coverage": "none — pasted URLHAUS_API_KEY rejected with 401 Invalid auth token on v2 exports; v1 probe returned empty",
+      "auth": "key present server-side but rejected; needs portal reissue",
+      "limitation": "Public csv_recent feed (above) remains the working URLhaus connector. Key value never logged."
+    },
+    {
+      "id": "threatfox",
+      "category": "B. External Intelligence",
+      "status": "Connected",
+      "records": "read-only lookups (search_ioc/search_hash); no bulk ingest",
+      "coverage": "live API; verified OPERATIONAL 2026-09-26 (HTTP 200 no_result); transient nginx 502 observed earlier same day with retry policy",
+      "auth": "Auth-Key header, server-side",
+      "limitation": "Provider-side transient 502s possible; client retries 502/503/504 max twice then UPSTREAM_ERROR, never empty."
+    },
+    {
+      "id": "virustotal",
+      "category": "B. External Intelligence",
+      "status": "Connected",
+      "records": "read-only lookups (urls/domains/ip_addresses/files); never uploads or submissions",
+      "coverage": "live API v3; verified CONNECTED 2026-09-26 (Amadey sample URL: 13 vendors malicious)",
+      "auth": "x-apikey header, server-side",
+      "limitation": "Community quota (60-min client cache); verdict requires >=2 malicious vendors; confidence never fabricated."
+    },
+    {
+      "id": "reversinglabs",
+      "category": "D. Disconnected/Pending Sources",
+      "status": "Failed",
+      "records": "0",
+      "coverage": "none — token-only HTTP Basic attempts against the documented malware_presence endpoint returned 401",
+      "auth": "Spectra Intelligence requires username+password Basic; a lone token is insufficient",
+      "limitation": "Needs portal username+password pair (or confirmation of what REVERSING_LABS_TOKEN was issued for). Service confirmed operational on vendor status page."
+    },
+    {
+      "id": "x-api",
+      "category": "D. Disconnected/Pending Sources",
+      "status": "Failed",
+      "records": "0",
+      "coverage": "none — Bearer accepted but project quota exhausted (HTTP 402 credits depleted, verified 2026-09-26)",
+      "auth": "app-only Bearer present server-side; quota-side failure, not auth",
+      "limitation": "Client reports RATE_LIMITED honestly; TweetFeed aggregation (above) remains the working X-sourced connector."
+    },
+    {
+      "id": "uci-phishing-websites-327",
+      "category": "C. ML/Research Data",
+      "status": "Research",
+      "records": "11,055 rows staged (file artifacts; training used corpus statistics only)",
+      "coverage": "circa 2012–2015 (historical)",
+      "auth": "n/a (local files)",
+      "license": "CC BY 4.0, DOI 10.24432/C51W2X",
+      "limitation": "NOT used for supervised training (no URL strings). Offline benchmark only."
+    },
+    {
+      "id": "tranco-top15k",
+      "category": "C. ML/Research Data",
+      "status": "Research",
+      "records": "14,999 legitimate-proxy URLs used 2026-09-25 for url-risk-lr-v1 training",
+      "coverage": "snapshot 2026-09-25 (popularity ranking, undated rows)",
+      "auth": "n/a",
+      "license": "Tranco research use (cite Le Pochat et al.)",
+      "limitation": "Popularity is a weak legitimacy proxy; documented in training metadata; never production cases."
+    },
+    {
+      "id": "india-districts-census2011",
+      "category": "A. Cyber-Sakhi Production (boundary geometry)",
+      "status": "Live",
+      "records": "641 district polygons served as static asset",
+      "coverage": "Census 2011 vintage (no Telangana; pre-delimitation NE/J&K)",
+      "auth": "n/a (public asset)",
+      "license": "CC BY 4.0, DataMeet",
+      "limitation": "Display geometry only; carries zero case data; ~440 m simplification."
+    }
+  ]
+}

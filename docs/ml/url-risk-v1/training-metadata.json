@@ -1,0 +1,25 @@
+{
+  "version": "url-risk-lr-v1",
+  "trained_at": "2026-09-25T14:48:07.570460+00:00",
+  "random_state": 42,
+  "corpus": {
+    "malicious_source": "abuse.ch URLhaus csv_recent (payload URLs)",
+    "malicious_rows": 14464,
+    "legitimate_source": "Tranco top-15k domains as bare http://host/ (popularity proxy)",
+    "legitimate_rows": 14999,
+    "urlhaus_sha256": "7c966efe4e6985f65b1ac9ef1b3aa837d73031c8a85d64e3b126c381033a8b4b",
+    "tranco_zip_note": "top-1m.csv.zip snapshot 2026-09-25",
+    "host_overlap_removed": 1
+  },
+  "split": "stratified 80/20, random_state=42",
+  "algorithm": "sklearn LogisticRegression(max_iter=2000) on StandardScaler lexical features",
+  "limitations": [
+    "Weak supervision: popularity is a proxy for legitimacy, not proof; URLhaus rows are payload droppers with heavy paths while legitimate rows are bare domains, so the model partly separates URL shape, not just maliciousness.",
+    "UCI phishing research corpus was NOT used for training (no URL strings); it remains the offline research benchmark.",
+    "No timestamps on legitimate rows: no time-split evaluation possible; scores are uncalibrated.",
+    "Never trained on Cyber-Sakhi case data (governance restriction).",
+    "Status: experimental. Not production-validated. All outputs are suggestions requiring analyst review.",
+    "Out-of-distribution probe 2026-09-25: only 86/185 (46.5%) reporter-tagged TweetFeed phishing URLs score >= 0.5. Test-set 99.9%% accuracy does NOT transfer to phishing detection; the model separates dropper-URL shape from bare popular domains. The deterministic rule baseline remains the enforced enrichment; statistical scores are shown with this caveat and require analyst review."
+  ],
+  "status": "experimental - not production-validated"
+}

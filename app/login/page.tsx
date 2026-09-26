@@ -13,6 +13,7 @@ import {
   KeyRound,
   Fingerprint,
   Check,
+  Play,
 } from "lucide-react";
 
 function LoginForm() {
@@ -24,7 +25,9 @@ function LoginForm() {
   const [identifier, setIdentifier] = useState("");
   const [password, setPassword] = useState("");
   const [isLoading, setIsLoading] = useState(false);
+  const [isDemoLoading, setIsDemoLoading] = useState(false);
   const [errorMessage, setErrorMessage] = useState<string | null>(null);
+  const [demoError, setDemoError] = useState<string | null>(null);
   const [successBanner, setSuccessBanner] = useState<string | null>(
     registered ? "Account created successfully! Please sign in." : null
   );
@@ -61,6 +64,44 @@ function LoginForm() {
       setErrorMessage("Invalid credentials.");
     } finally {
       setIsLoading(false);
+    }
+  };
+
+  const handleDemoLogin = async () => {
+    if (isDemoLoading || isLoading) return;
+
+    setIsDemoLoading(true);
+    setDemoError(null);
+    setErrorMessage(null);
+    setSuccessBanner(null);
+    setNoticeBanner(null);
+
+    try {
+      // Call NextAuth directly with the demo Sakhi number
+      // The special demo password will be handled server-side in authOptions
+      const signInRes = await signIn("credentials", {
+        identifier: "SAKHI-2026-DSAX",
+        password: "SIH_DEMO_AUTH_TOKEN", // Special token recognized by authOptions
+        redirect: false,
+        callbackUrl,
+      });
+
+      if (signInRes?.error) {
+        // Provide more specific error message based on the error
+        setDemoError("Demo login failed. Please ensure SIH Demo mode is enabled and the demo account is configured correctly.");
+        setIsDemoLoading(false);
+        return;
+      }
+
+      if (signInRes?.ok) {
+        router.push(callbackUrl);
+        router.refresh();
+        return;
+      }
+    } catch (err) {
+      setDemoError("A network error occurred. Please try again.");
+    } finally {
+      setIsDemoLoading(false);
     }
   };
 
@@ -153,6 +194,50 @@ function LoginForm() {
               <span>{errorMessage}</span>
             </div>
           )}
+
+          {/* Demo Error Alert */}
+          {demoError && (
+            <div className="p-3.5 rounded-xl bg-red-950/80 border border-red-500/50 text-red-200 text-xs flex items-center gap-2 animate-fade-in-up">
+              <AlertCircle className="w-4 h-4 text-red-400 shrink-0" />
+              <span>{demoError}</span>
+            </div>
+          )}
+
+          {/* SIH Demo Button */}
+          <div className="p-4 rounded-2xl"
+            style={{
+              background: "linear-gradient(135deg, rgba(59, 130, 246, 0.15), rgba(5, 5, 10, 0.4))",
+              border: "1px solid rgba(59, 130, 246, 0.3)",
+            }}
+          >
+            <button
+              type="button"
+              onClick={handleDemoLogin}
+              disabled={isDemoLoading || isLoading}
+              className="w-full py-3 px-4 rounded-xl text-white font-bold tracking-wide text-sm transition flex items-center justify-center gap-2 disabled:opacity-50 disabled:cursor-not-allowed"
+              style={{
+                background: "linear-gradient(135deg, #3b82f6 0%, #2563eb 50%, #1d4ed8 100%)",
+                boxShadow: "0 15px 40px -12px rgba(59, 130, 246, 0.5), inset 0 1px 0 rgba(255,255,255,0.18)",
+              }}
+            >
+              {isDemoLoading ? (
+                <span className="flex items-center gap-2">
+                  <span
+                    className="w-3.5 h-3.5 border-2 border-white/40 border-t-white rounded-full animate-spin"
+                  />
+                  Starting SIH Demo...
+                </span>
+              ) : (
+                <>
+                  <Play className="w-4 h-4" />
+                  <span>Try SIH Demo</span>
+                </>
+              )}
+            </button>
+            <p className="text-[10px] text-slate-400 text-center mt-2 leading-relaxed">
+              Explore Cyber-Sakhi using a restricted demonstration account.
+            </p>
+          </div>
 
           {/* Credentials Form */}
           <form onSubmit={handleCredentialsLogin} className="space-y-4 text-xs">

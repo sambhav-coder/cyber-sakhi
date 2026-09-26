@@ -36,6 +36,7 @@ import {
   assessOverall,
   assessSenderRisk,
   buildSuspicionReasons,
+  validationRecord,
 } from "./riskAssessments";
 import { analyzeLanguage } from "./languageAnalysis";
 import type { PipelineStage, SuspicionReason } from "./emailTypes";
@@ -56,6 +57,9 @@ import { assessAttribution } from "./attribution";
 import type { AttributionAnalysis } from "./attribution";
 import { generateAlerts } from "./alerts";
 import { maskPii, retentionStageFor } from "./privacy/masking";
+import { enrichWithDeadline } from "./intel/orchestrator";
+import type { EnrichmentReport } from "./intel/orchestrator";
+import { isValidEmailIndicator, normalizeDomainIndicator, normalizeUrlIndicator } from "./indicatorNormalize";
 
 // ---------------------------------------------------------------------------
 // 1. SPF / DKIM / DMARC — extract verdicts from Authentication-Results header
@@ -230,7 +234,12 @@ interface PhishingResult {
 
 function extractUrls(text: string): string[] {
   const matches = text.match(/https?:\/\/[^\s<>"']+/gi) || [];
-  return [...new Set(matches)];
+  const out: string[] = [];
+  for (const m of matches) {
+    const normalized = normalizeUrlIndicator(m);
+    if (normalized && !out.includes(normalized)) out.push(normalized);
+  }
+  return out;
 }
 
 function extractEmailsFromText(text: string): string[] {
@@ -516,6 +525,12 @@ export interface AnalyzeEmailOptions {
    * logic is otherwise identical; only network-derived signals are absent.
    */
   offline?: boolean;
+  /**
+   * Owner scope for internal-DB intelligence matches. When absent, the
+   * internal provider is skipped honestly (NOT_CONFIGURED) — external
+   * lookups still run.
+   */
+  userId?: string | null;
 }
 
 export async function analyzeEmail(
@@ -746,11 +761,12 @@ export async function analyzeEmail(
     });
   }
 
-  // Domains
+  // Domains (normalized: qp garbage and malformed hosts never become indicators)
   const domainsSet = new Set<string>();
   [fromAddr, replyAddr, returnAddr].forEach((addr) => {
     const d = extractDomain(addr);
-    if (d) domainsSet.add(d);
+    const normalized = d ? normalizeDomainIndicator(d) : null;
+    if (normalized) domainsSet.add(normalized);
   });
 
   for (const domain of domainsSet) {
@@ -774,10 +790,13 @@ export async function analyzeEmail(
     });
   }
 
-  // Emails extracted from body (excluding the main sender/recipient)
+  // Emails extracted from body (excluding the main sender/recipient).
+  // Syntax-validated only: an address here is CONTACT context, never a
+  // malicious verdict (see internalIntel role handling).
   const emailsInBody = extractEmailsFromText(rawEmailInput);
   for (const addr of emailsInBody.slice(0, 10)) {
     if (addr === fromAddr) continue;
+    if (!isValidEmailIndicator(addr)) continue;
     indicators.push({
       type: "email",
       value: addr,
@@ -802,6 +821,51 @@ export async function analyzeEmail(
   // checked-no-match / match / validation-failed / conflicting). This is the
   // "validate" pipeline stage — a skipped or failed lookup never reads as clean.
   indicators = applyThreatIntelValidation(indicators, threatIntel);
+
+  // Step I3b: External/internal/model threat-intel enrichment (URLhaus,
+  // ThreatFox, VirusTotal, X, geo, internal DB, ML URL risk) via the
+  // central orchestrator. Failure-isolated and deadline-bounded: a provider
+  // outage or timeout degrades to typed per-provider statuses and NEVER
+  // breaks the analysis. External MALICIOUS verdicts upgrade the matching
+  // indicator (upgrade-only); nothing here downgrades existing verdicts,
+  // invents SAFE verdicts, or changes the composite threat score.
+  let externalIntel: EnrichmentReport | undefined;
+  if (!offline) {
+    try {
+      externalIntel = await enrichWithDeadline(indicators, {
+        userId: options.userId ?? null,
+        maxIndicators: 12,
+        totalTimeoutMs: 15_000,
+      });
+      const maliciousByValue = new Map<string, string[]>();
+      for (const enriched of externalIntel.results) {
+        if (!enriched.externalMalicious) continue;
+        const providers = enriched.results
+          .filter((r) => r.sourceKind === "EXTERNAL_PROVIDER" && r.status === "CONNECTED_DATA" && r.verdict === "MALICIOUS")
+          .map((r) => r.provider);
+        if (providers.length > 0) {
+          maliciousByValue.set(`${enriched.type}:${enriched.value.toLowerCase()}`, providers);
+        }
+      }
+      if (maliciousByValue.size > 0) {
+        indicators = indicators.map((ind) => {
+          const providers = maliciousByValue.get(`${ind.type}:${ind.value.toLowerCase()}`);
+          if (!providers) return ind;
+          return {
+            ...ind,
+            malicious: true,
+            validation: validationRecord(
+              "match",
+              providers.join(" + "),
+              `External threat-intel match (${providers.join(", ")}). Corroborating evidence, not a standalone verdict.`,
+            ),
+          };
+        });
+      }
+    } catch {
+      externalIntel = undefined;
+    }
+  }
 
   // Step I4: Structured URL risk (shape analysis only — URLs are never opened,
   // fetched or dereferenced). Computed now so content risk can consume it.
@@ -1063,6 +1127,38 @@ recommendedAction:
     }
   }
 
+  // Step K3.6b: External threat-intel matches (URLhaus / ThreatFox /
+  // VirusTotal DATA verdicts). Corroborating only: never a verdict, never
+  // a score input. Provider failures are invisible here by design — they
+  // live typed inside result.externalIntel, never as findings.
+  const externalMatches = (externalIntel?.results ?? []).filter((r) => r.externalMalicious);
+  if (externalMatches.length > 0) {
+    const lines = externalMatches.slice(0, 5).map((r) => {
+      const providers = r.results
+        .filter((x) => x.sourceKind === "EXTERNAL_PROVIDER" && x.status === "CONNECTED_DATA" && x.verdict === "MALICIOUS")
+        .map((x) => `${x.provider}${x.malwareFamily ? ` (${x.malwareFamily})` : ""}${x.reference ? ` <${x.reference}>` : ""}`);
+      return `${r.type} ${r.value}: ${providers.join("; ")}`;
+    });
+    findings.push(
+      `🚨 External threat-intel match(es): ${externalMatches.length} indicator(s) flagged by ${[...new Set(externalMatches.flatMap((r) => r.results.filter((x) => x.verdict === "MALICIOUS").map((x) => x.provider)))].join(", ")}.`
+    );
+    structuredFindings.unshift({
+      id: "FND-EXT-" + structuredFindings.length + "-" + Math.floor(Math.random() * 1000),
+      category: "THREAT_INTELLIGENCE",
+      severity: "HIGH",
+      confidence: 0.85,
+      description: "Indicator(s) in this email match external threat-intelligence feeds.",
+      technicalEvidence: lines.join(" | "),
+      humanExplanation:
+        "Cyber Sakhi looked up the email's URLs, domains, IPs and hashes against URLhaus, ThreatFox and VirusTotal. A match means independent researchers previously tied this exact indicator to malicious activity — strong corroboration when the rest of the report agrees.",
+      recommendedAction:
+        "Treat a feed match as strong corroboration. Do not click links or open attachments from this email; report it through the usual channel.",
+      validationStatus: "Checked — Match",
+      benignExplanation:
+        "Feeds occasionally list cleaned-up or shared infrastructure (a match can outlive the threat); corroboration still requires the rest of the report to agree.",
+    });
+  }
+
   // Step K4: DNS re-verification — published auth policy vs the header claim.
   if (dnsAuth) {
     const dnsSpfBad =
@@ -1249,6 +1345,9 @@ recommendedAction:
     dnsAuth,
     threatIntel,
     urlRisk,
+    // External/internal/model enrichment (Step I3b): per-provider typed
+    // statuses + normalized results. Corroborating context only.
+    externalIntel,
     // Separated risk dimensions + suspicion reasoning + language + pipeline
     // stages. Additive and backward-compatible: existing consumers keep reading
     // threatScore/threatLevel/verdict; these power the summary-first UI.

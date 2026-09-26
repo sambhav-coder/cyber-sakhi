@@ -15,7 +15,8 @@
 
 import { getSupabaseServer } from "@/lib/supabaseServer";
 import { throwIfError } from "@/lib/db/errors";
-import { isGovThreatCategory, mapLegacyThreatCategory } from "./govThreatCategories";
+import { isGovThreatCategory, displayThreatCategory } from "./govThreatCategories";
+import { isWellFormedIndicator } from "@/lib/indicatorNormalize";
 import {
   GOV_UNLOCATED_LABEL,
   classifyGovJurisdiction,
@@ -25,6 +26,7 @@ import {
   normalizeGovSubDivision,
 } from "./govJurisdictions";
 import type { GovOfficerRow } from "./govCredentials";
+import { GOV_STATE_JURISDICTIONS } from "./govOfficerCode";
 import {
   createGovAssignment,
   listActiveAssignmentsForOfficer,
@@ -61,7 +63,24 @@ export type GovScopeFilter =
   | { kind: "all" }
   | { kind: "state"; stateCode: string }
   | { kind: "district"; stateCode: string; districtCode: string }
-  | { kind: "assigned"; caseIds: string[] };
+  | { kind: "assigned"; caseIds: string[] }
+  /**
+   * Non-attributed jurisdiction: cases whose `state_code` is NULL.
+   *
+   * Produced only for a STATE-scoped officer whose `state_code` is a
+   * *present but shape-invalid* jurisdiction code — i.e. the `DEMO`
+   * demonstration sentinel defined in lib/gov/govOfficerCode.ts. Such a value
+   * is not a state the `cases` table can ever hold: `createCase`
+   * (lib/db/cases.ts) never writes `state_code`, and `buildGovTriagePatch` is
+   * the only government write path to a case and does not set it either. A
+   * literal `state_code = 'DEMO'` predicate is therefore unsatisfiable by
+   * construction and would hide every record forever.
+   *
+   * This predicate is strictly NARROWER than `all`: it excludes every case
+   * that carries a real jurisdiction code, so it never widens a
+   * demonstration account into an ALL_INDIA one.
+   */
+  | { kind: "unattributed"; label: string };
 
 export type GovScopeOfficerInput = Pick<
   GovOfficerRow,
@@ -75,8 +94,20 @@ export async function resolveGovScopeFilter(
   switch (officer.scope) {
     case "ALL_INDIA":
       return { kind: "all" };
-    case "STATE":
-      return { kind: "state", stateCode: officer.state_code ?? "" };
+    case "STATE": {
+      const raw = (officer.state_code ?? "").trim();
+      const normalized = normalizeGovStateCode(raw);
+      // A present-but-shape-invalid jurisdiction code (the `DEMO`
+      // demonstration sentinel) is not a literal state value, so matching it
+      // literally can never return a row. Resolve it to the non-attributed
+      // jurisdiction instead of an impossible predicate.
+      if (!normalized.valid && !normalized.missing) {
+        return { kind: "unattributed", label: raw.toUpperCase() };
+      }
+      // A MISSING state code is a misconfigured officer, not a jurisdiction.
+      // Stay fail-closed: the literal empty predicate matches no case.
+      return { kind: "state", stateCode: normalized.value ?? "" };
+    }
     case "DISTRICT":
       return {
         kind: "district",
@@ -106,6 +137,10 @@ export function applyGovScopeFilter(
       return query.eq("state_code", filter.stateCode).eq("district_code", filter.districtCode);
     case "assigned":
       return query.in("id", filter.caseIds);
+    case "unattributed":
+      // Fail-closed and narrowly defined: only rows with no state at all.
+      // A case attributed to any real jurisdiction is excluded.
+      return query.is("state_code", null);
     case "all":
       return caseIds.length ? query.in("id", caseIds) : query;
   }
@@ -114,6 +149,46 @@ export function applyGovScopeFilter(
 /** True when the scope filter is the empty assignees special case. */
 export function isScopeEmpty(filter: GovScopeFilter): boolean {
   return filter.kind === "assigned" && filter.caseIds.length === 0;
+}
+
+/**
+ * Client-safe description of a resolved scope. Carries NO counts from outside
+ * the officer's jurisdiction: it explains *why* a result may legitimately be
+ * zero (role/scope/filters/attribution) without disclosing how many records
+ * exist beyond the officer's authorization.
+ */
+export interface GovScopeDescription {
+  kind: GovScopeFilter["kind"];
+  /** Human label, e.g. "All India", "Delhi", "Demonstration jurisdiction". */
+  label: string;
+  /** True when matching cases must carry a state/district attribution. */
+  requiresAttribution: boolean;
+}
+
+const JURISDICTION_NAMES: Readonly<Record<string, string>> = GOV_STATE_JURISDICTIONS;
+
+/** Describe a resolved scope for display and for honest empty-state copy. */
+export function describeGovScopeFilter(filter: GovScopeFilter): GovScopeDescription {
+  switch (filter.kind) {
+    case "all":
+      return { kind: "all", label: "All India", requiresAttribution: false };
+    case "state":
+      return {
+        kind: "state",
+        label: JURISDICTION_NAMES[filter.stateCode] ?? filter.stateCode,
+        requiresAttribution: true,
+      };
+    case "district":
+      return {
+        kind: "district",
+        label: `${filter.districtCode} · ${JURISDICTION_NAMES[filter.stateCode] ?? filter.stateCode}`,
+        requiresAttribution: true,
+      };
+    case "unattributed":
+      return { kind: "unattributed", label: filter.label, requiresAttribution: false };
+    case "assigned":
+      return { kind: "assigned", label: "Assigned cases", requiresAttribution: true };
+  }
 }
 
 // ---------------------------------------------------------------------------
@@ -146,6 +221,8 @@ export interface GovCaseView {
   currency: string | null;
   caseSource: string | null;
   createdBy: string | null;
+  /** Reporter Sakhi number (batch-attached in the explorer; null elsewhere). */
+  sakhiNumber: string | null;
   assignedOfficer: {
     officerId: string;
     officerCode: string | null;
@@ -153,6 +230,20 @@ export interface GovCaseView {
   } | null;
 }
 
+/**
+ * Canonical case lifecycle (Phase 6 — single source of truth).
+ *
+ * NEW means untriaged: every case is created NEW and stays NEW until an
+ * officer triages it (TRIAGED), assigns it (ASSIGNED), or moves it into
+ * active states. There is NO separate NEEDS_TRIAGE status value.
+ *
+ * Derived "Needs Triage" (dashboard card + queue NEW view) is therefore
+ * defined as gov_status IN (NEW, TRIAGED): cases that have not yet entered
+ * ASSIGNED / UNDER_INVESTIGATION / AWAITING_EVIDENCE / RESOLVED / CLOSED.
+ * The queue TRIAGED tab is the TRIAGED-only subset. All consumers
+ * (dashboard metrics, queue, explorer, trends) share these definitions —
+ * no component invents its own.
+ */
 const CASE_CODE_LABELS: Record<string, string> = {
   NEW: "New",
   TRIAGED: "Triaged",
@@ -216,21 +307,23 @@ function toGovCaseView(row: RawGovCaseRow): GovCaseView {
     currency: row.currency,
     caseSource: row.case_source,
     createdBy: row.created_by,
+    sakhiNumber: null,
     assignedOfficer: null,
   };
 }
 
-/** Attach ACTIVE primary assignments to a set of case views. */
-async function attachAssignments(
-  rows: GovCaseView[],
-  officerNames: Map<string, { officerCode: string; fullName: string }>,
-): Promise<GovCaseView[]> {
+/**
+ * Correct assignment attach: fetch ACTIVE primary assignments first, then
+ * resolve officer names for the officers actually assigned. (Earlier
+ * call-sites collected officer ids from views whose assignedOfficer was
+ * still null, so names never resolved and every row showed Unassigned.)
+ */
+async function attachAssignmentsWithNames(rows: GovCaseView[]): Promise<GovCaseView[]> {
   if (rows.length === 0) return rows;
-  const ids = rows.map((r) => r.id);
   const { data, error } = await getSupabaseServer()
     .from("case_assignments")
     .select("case_id,officer_id,assignment_type,status")
-    .in("case_id", ids)
+    .in("case_id", rows.map((r) => r.id))
     .eq("status", "ACTIVE");
   throwIfError(error, "Failed to load case assignments.");
   const byCase = new Map<string, string>();
@@ -242,10 +335,11 @@ async function attachAssignments(
   }>).filter((a) => a.assignment_type === "PRIMARY")) {
     if (!byCase.has(a.case_id)) byCase.set(a.case_id, a.officer_id);
   }
+  const names = await officerNameMap([...new Set(byCase.values())]);
   return rows.map((row) => {
     const officerId = byCase.get(row.id);
     if (!officerId) return row;
-    const name = officerNames.get(officerId);
+    const name = names.get(officerId);
     return {
       ...row,
       assignedOfficer: name
@@ -253,6 +347,18 @@ async function attachAssignments(
         : { officerId, officerCode: null, fullName: null },
     };
   });
+}
+
+/** Batch-attach reporter Sakhi numbers (one profiles query per page, never per row). */
+async function attachSakhiNumbers(rows: GovCaseView[]): Promise<GovCaseView[]> {
+  const ids = [...new Set(rows.map((r) => r.createdBy).filter((x): x is string => Boolean(x)))];
+  if (ids.length === 0) return rows;
+  const { data, error } = await getSupabaseServer().from("profiles").select("id,sakhi_number").in("id", ids);
+  if (error) return rows;
+  const byId = new Map(
+    ((data ?? []) as Array<{ id: string; sakhi_number: string | null }>).map((p) => [p.id, p.sakhi_number] as const),
+  );
+  return rows.map((row) => ({ ...row, sakhiNumber: row.createdBy ? (byId.get(row.createdBy) ?? null) : null }));
 }
 
 async function officerNameMap(officerIds: string[]): Promise<Map<string, { officerCode: string; fullName: string }>> {
@@ -390,10 +496,8 @@ export async function govExplorer(query: GovExplorerQuery): Promise<GovExplorerR
   throwIfError(error, "Failed to query government cases.");
 
   const raw = ((data ?? []) as RawGovCaseRow[]).map(toGovCaseView);
-  const officerIdsToFetch = raw
-    .map((r) => r.assignedOfficer?.officerId)
-    .filter((x): x is string => Boolean(x));
-  const rows = await attachAssignments(raw, await officerNameMap([...new Set(officerIdsToFetch)]));
+  const withNames = await attachAssignmentsWithNames(raw);
+  const rows = await attachSakhiNumbers(withNames);
 
   return { rows, total: count ?? 0, page, pageSize };
 }
@@ -1195,9 +1299,11 @@ export async function govGeoSummary(opts: {
 
     // Per-region canonical category counts: one increment per case, so
     // category counts always sum to the region total (no double counting).
-    // Read-time mapping is case/whitespace tolerant; write-path validation
-    // stays strict elsewhere.
-    const cat = mapLegacyThreatCategory(row.threat_category).category;
+    // Read-time mapping is case/whitespace tolerant; unclassifiable values
+    // aggregate under "Unclassified" (displayThreatCategory) so the chart
+    // never pretends classification exists. Write-path validation stays
+    // strict elsewhere.
+    const cat = displayThreatCategory(row.threat_category);
     const catMap = perRegionCategories.get(key) ?? new Map<string, number>();
     catMap.set(cat, (catMap.get(cat) ?? 0) + 1);
     perRegionCategories.set(key, catMap);
@@ -1238,10 +1344,11 @@ export async function govGeoSummary(opts: {
     const rc = new Map<string, number>();
     for (const row of rowsVec) {
       // Canonical read-time mapping: case/whitespace tolerant, legacy
-      // aliases resolved explicitly, everything else folds to OTHER with
-      // matched:false. One increment per case — counts always sum to the
-      // scoped total.
-      const t = mapLegacyThreatCategory(row.threat_category).category;
+      // aliases resolved explicitly, unclassifiable values fold to
+      // "Unclassified" (displayThreatCategory) — never silently into the
+      // canonical OTHER bucket. One increment per case — counts always sum
+      // to the scoped total.
+      const t = displayThreatCategory(row.threat_category);
       tc.set(t, (tc.get(t) ?? 0) + 1);
       const r = row.risk_level ?? "Unset";
       rc.set(r, (rc.get(r) ?? 0) + 1);
@@ -1367,8 +1474,13 @@ export async function govSearchIndicators(
 
   const scopedRows = rows.filter((r) => r.case_id && allowed.has(r.case_id));
 
+  // Historic qp-garbage rows (e.g. `http://www.=`) are provably not real
+  // IOCs: excluded from recurrence grouping at display time. The rows
+  // themselves are never deleted or rewritten — unknown stays unknown.
+  const wellFormedRows = scopedRows.filter((r) => isWellFormedIndicator(r.type, r.value));
+
   const byValue = new Map<string, GovIndicatorResultItem>();
-  for (const row of scopedRows) {
+  for (const row of wellFormedRows) {
     const key = `${row.type}|${row.value}`;
     const item = byValue.get(key) ?? {
       type: row.type,
@@ -1456,6 +1568,8 @@ export interface GovQueueResult {
   counts: Record<string, number>;
   priority: GovCaseView[];
   newCases: GovCaseView[];
+  /** TRIAGED-only list: the TRIAGED tab is a real query, not an alias. */
+  triagedCases: GovCaseView[];
   view: "NEW" | "TRIAGED" | "PRIORITY";
   total: number;
 }
@@ -1464,32 +1578,42 @@ export async function govQueue(
   scope: GovScopeFilter,
   view: "NEW" | "TRIAGED" | "PRIORITY",
   pageSize = 25,
+  window?: { from?: string | null; to?: string | null },
 ): Promise<GovQueueResult> {
   if (isScopeEmpty(scope)) {
-    return { counts: {}, priority: [], newCases: [], view, total: 0 };
+    return { counts: {}, priority: [], newCases: [], triagedCases: [], view, total: 0 };
   }
 
   const sb = getSupabaseServer();
   let q = sb.from("cases").select(GOV_CASE_VIEW_FIELDS, { count: "exact", head: false });
   q = applyGovScopeFilter(q, scope);
+  // Overview date-filter consistency: when the caller passes the selected
+  // reporting window, the queue preview reflects the same population.
+  // Absent (queue page default), the queue is intentionally unwindowed.
+  if (window?.from) q = q.gte("created_at", window.from);
+  if (window?.to) q = q.lte("created_at", window.to);
   q = q.order("created_at", { ascending: false }).range(0, pageSize * 3 - 1);
   const { data, error, count } = await q;
   throwIfError(error, "Failed to load investigation queue.");
 
   const raw = ((data ?? []) as RawGovCaseRow[]).map(toGovCaseView);
-  const officerIdsToFetch = raw.map((r) => r.assignedOfficer?.officerId).filter((x): x is string => Boolean(x));
-  const rows = await attachAssignments(raw, await officerNameMap([...new Set(officerIdsToFetch)]));
+  const rows = await attachAssignmentsWithNames(raw);
 
   const counts: Record<string, number> = {};
   for (const row of rows) counts[row.govStatus] = (counts[row.govStatus] ?? 0) + 1;
 
-  const byPriority = [...rows].sort((a, b) => riskRank(b.riskLevel) - riskRank(a.riskLevel));
+  // Canonical risk order CRITICAL > HIGH > MEDIUM > LOW > UNSET, with
+  // newest-first as the deterministic tie-breaker (no invented SLA).
+  const byPriority = [...rows].sort(
+    (a, b) => riskRank(b.riskLevel) - riskRank(a.riskLevel) || (a.createdAt < b.createdAt ? 1 : a.createdAt > b.createdAt ? -1 : 0),
+  );
   const priority = (view === "PRIORITY" ? byPriority : rows).filter(
     (r) => r.govStatus !== "RESOLVED" && r.govStatus !== "CLOSED",
   );
   const newCases = rows.filter((r) => r.govStatus === "NEW" || r.govStatus === "TRIAGED");
+  const triagedCases = rows.filter((r) => r.govStatus === "TRIAGED");
 
-  return { counts, priority: priority.slice(0, pageSize), newCases: newCases.slice(0, pageSize), view, total: count ?? 0 };
+  return { counts, priority: priority.slice(0, pageSize), newCases: newCases.slice(0, pageSize), triagedCases: triagedCases.slice(0, pageSize), view, total: count ?? 0 };
 }
 
 function riskRank(level: string | null): number {
@@ -1505,6 +1629,61 @@ function riskRank(level: string | null): number {
     default:
       return 0;
   }
+}
+
+/**
+ * Zero-filled time buckets over [from, to] (Phase 21). Daily buckets up to
+ * 120 days, weekly (Monday-start) beyond that. Pure and unit-tested: the
+ * bucket counts always sum to the input total.
+ */
+export function timeBucketResolution(from: string, to: string): "day" | "week" {
+  const fromMs = Date.parse(from);
+  const toMs = Date.parse(to);
+  if (Number.isNaN(fromMs) || Number.isNaN(toMs)) return "day";
+  return Math.ceil((toMs - fromMs) / 86_400_000) > 120 ? "week" : "day";
+}
+export function buildTimeBuckets(
+  from: string,
+  to: string,
+  dayCounts: Map<string, number>,
+): Array<{ day: string; count: number }> {
+  const fromMs = Date.parse(from);
+  const toMs = Date.parse(to);
+  if (Number.isNaN(fromMs) || Number.isNaN(toMs) || fromMs > toMs) return [];
+  const spanDays = Math.ceil((toMs - fromMs) / 86_400_000);
+  if (spanDays > 3660) return [];
+  const weekly = timeBucketResolution(from, to) === "week";
+  const buckets = new Map<string, number>();
+  const cursor = new Date(Date.UTC(
+    new Date(fromMs).getUTCFullYear(),
+    new Date(fromMs).getUTCMonth(),
+    new Date(fromMs).getUTCDate(),
+  ));
+  const end = new Date(Date.UTC(
+    new Date(toMs).getUTCFullYear(),
+    new Date(toMs).getUTCMonth(),
+    new Date(toMs).getUTCDate(),
+  ));
+  const keyFor = (d: Date): string => {
+    if (!weekly) return d.toISOString().slice(0, 10);
+    const monday = new Date(d);
+    const dow = (monday.getUTCDay() + 6) % 7;
+    monday.setUTCDate(monday.getUTCDate() - dow);
+    return monday.toISOString().slice(0, 10);
+  };
+  for (let d = new Date(cursor); d <= end; d.setUTCDate(d.getUTCDate() + 1)) {
+    const key = keyFor(d);
+    if (!buckets.has(key)) buckets.set(key, 0);
+  }
+  for (const [day, count] of dayCounts) {
+    const parsed = Date.parse(day.length === 10 ? `${day}T00:00:00Z` : day);
+    if (Number.isNaN(parsed)) continue;
+    const key = keyFor(new Date(parsed));
+    if (buckets.has(key)) buckets.set(key, (buckets.get(key) ?? 0) + count);
+  }
+  return [...buckets.entries()]
+    .map(([day, count]) => ({ day, count }))
+    .sort((a, b) => (a.day < b.day ? -1 : 1));
 }
 
 // ---------------------------------------------------------------------------
@@ -1523,22 +1702,39 @@ export interface GovDashboardMetrics {
   window: GovDashboardTimeWindow;
   filters: { stateCode: string | null; districtCode: string | null };
   metrics: {
+    /** All accessible cases after scope/location filters; not limited by the chart window. */
     total: number;
+    /** Cases created inside the selected reporting window. */
+    windowTotal: number;
     new: number;
     highRisk: number;
     underInvestigation: number;
     resolved: number;
     open: number;
+    closed: number;
+    awaitingEvidence: number;
+    triageNeeded: number;
+    unassigned: number;
+    assignedToMe: number;
   };
   threatDistribution: Array<{ label: string; count: number }>;
   riskDistribution: Array<{ label: string; count: number }>;
   statusDistribution: Array<{ label: string; count: number }>;
+  /**
+   * Resolved authorization scope actually applied to these figures. Present so
+   * a zero can be explained as "nothing in your jurisdiction" instead of
+   * being rendered as a bare, indistinguishable 0. Contains no counts from
+   * outside the officer's authorization.
+   */
+  scope: GovScopeDescription;
 }
 
 export interface GovDashboardFilterInput {
   window?: GovDashboardTimeWindow;
   stateCode?: string | null;
   districtCode?: string | null;
+  /** Viewer officer id: enables the assignedToMe metric. */
+  officerId?: string | null;
 }
 
 /** Build a time window from a range label; null bounds mean "no bound". */
@@ -1547,7 +1743,10 @@ export function govDashboardWindow(range: string, from?: string, to?: string): G
   const daysAgo = (n: number) => new Date(now.getTime() - n * 24 * 60 * 60 * 1000).toISOString();
   switch (range) {
     case "today": {
-      const start = new Date(now.getFullYear(), now.getMonth(), now.getDate()).toISOString();
+      // UTC day boundary (not local midnight): created_at is stored in UTC,
+      // and new Date(localMidnight).toISOString() would shift the window by
+      // the server's timezone offset. One consistent strategy everywhere.
+      const start = new Date(Date.UTC(now.getUTCFullYear(), now.getUTCMonth(), now.getUTCDate())).toISOString();
       return { label: "today", from: start, to: now.toISOString() };
     }
     case "30d":
@@ -1575,19 +1774,31 @@ export async function govDashboardMetrics(
     generatedAt: new Date().toISOString(),
     window: input.window ?? { label: "7d", from: null, to: null },
     filters: { stateCode: input.stateCode ?? null, districtCode: input.districtCode ?? null },
-    metrics: { total: 0, new: 0, highRisk: 0, underInvestigation: 0, resolved: 0, open: 0 },
+    metrics: { total: 0, windowTotal: 0, new: 0, highRisk: 0, underInvestigation: 0, resolved: 0, open: 0, closed: 0, awaitingEvidence: 0, triageNeeded: 0, unassigned: 0, assignedToMe: 0 },
     threatDistribution: [],
     riskDistribution: [],
     statusDistribution: [],
+    scope: describeGovScopeFilter(scope),
   };
   if (isScopeEmpty(scope)) return empty;
 
   const window = input.window ?? { label: "7d", from: null, to: null };
   const sb = getSupabaseServer();
 
+  // The headline is an operational inventory, not a seven-day trend. This
+  // prevents existing, accessible cases from disappearing merely because
+  // they predate the selected chart window. All remaining facets stay tied
+  // to that window and expose windowTotal for honest denominators.
+  let allCountQuery = sb.from("cases").select("id", { count: "exact", head: true });
+  allCountQuery = applyGovScopeFilter(allCountQuery, scope);
+  if (input.stateCode) allCountQuery = allCountQuery.eq("state_code", input.stateCode);
+  if (input.districtCode) allCountQuery = allCountQuery.eq("district_code", input.districtCode);
+  const { count: allCount, error: allCountError } = await allCountQuery;
+  throwIfError(allCountError, "Failed to aggregate accessible case count.");
+
   let q = sb
     .from("cases")
-    .select("threat_category,risk_level,gov_status,created_at", { count: "exact", head: false })
+    .select("id,threat_category,risk_level,gov_status,created_at", { count: "exact", head: false })
     .order("created_at", { ascending: false });
   q = applyGovScopeFilter(q, scope);
   if (input.stateCode) q = q.eq("state_code", input.stateCode);
@@ -1600,6 +1811,7 @@ export async function govDashboardMetrics(
   throwIfError(error, "Failed to aggregate dashboard metrics.");
 
   const rows = (data ?? []) as Array<{
+    id: string;
     threat_category: string | null;
     risk_level: string | null;
     gov_status: string;
@@ -1607,28 +1819,66 @@ export async function govDashboardMetrics(
   }>;
 
   const metrics = {
-    total: count ?? rows.length,
-    new: rows.length,
+    total: allCount ?? 0,
+    windowTotal: count ?? rows.length,
+    new: 0,
     highRisk: 0,
     underInvestigation: 0,
     resolved: 0,
     open: 0,
+    closed: 0,
+    awaitingEvidence: 0,
+    triageNeeded: 0,
+    unassigned: 0,
+    assignedToMe: 0,
   };
   const tc = new Map<string, number>();
   const rc = new Map<string, number>();
   const sc = new Map<string, number>();
   for (const row of rows) {
+    // "New" counts cases still in the NEW lifecycle state — never the
+    // window total. "Needs Triage" is NEW + TRIAGED to match the queue's
+    // NEW view (govQueue), so the card and the queue reconcile.
+    if (row.gov_status === "NEW") metrics.new += 1;
     if (row.risk_level === "HIGH" || row.risk_level === "CRITICAL") metrics.highRisk += 1;
     if (row.gov_status === "UNDER_INVESTIGATION") metrics.underInvestigation += 1;
     if (row.gov_status === "RESOLVED") metrics.resolved += 1;
+    if (row.gov_status === "CLOSED") metrics.closed += 1;
+    if (row.gov_status === "AWAITING_EVIDENCE") metrics.awaitingEvidence += 1;
+    if (row.gov_status === "NEW" || row.gov_status === "TRIAGED") metrics.triageNeeded += 1;
     if (row.gov_status !== "RESOLVED" && row.gov_status !== "CLOSED") metrics.open += 1;
     // Canonical read-time category mapping (one increment per case).
-    const t = mapLegacyThreatCategory(row.threat_category).category;
+    // Unclassifiable values aggregate under an explicit "Unclassified"
+    // segment — never silently folded into the canonical OTHER bucket.
+    const t = displayThreatCategory(row.threat_category);
     tc.set(t, (tc.get(t) ?? 0) + 1);
     const r = row.risk_level ?? "Unset";
     rc.set(r, (rc.get(r) ?? 0) + 1);
     const s = govStatusLabel(row.gov_status);
     sc.set(s, (sc.get(s) ?? 0) + 1);
+  }
+
+  // Assignment posture for in-window rows: ACTIVE PRIMARY assignments only.
+  // Chunked (500 ids) so large windows never build an unbounded IN list.
+  {
+    const ids = rows.map((r) => r.id);
+    const assigned = new Map<string, string>();
+    for (let k = 0; k < ids.length; k += 500) {
+      const { data: asn, error: aerr } = await sb
+        .from("case_assignments")
+        .select("case_id,officer_id")
+        .in("case_id", ids.slice(k, k + 500))
+        .eq("status", "ACTIVE")
+        .eq("assignment_type", "PRIMARY");
+      throwIfError(aerr, "Failed to aggregate assignment metrics.");
+      for (const a of ((asn ?? []) as Array<{ case_id: string; officer_id: string }>)) {
+        if (!assigned.has(a.case_id)) assigned.set(a.case_id, a.officer_id);
+      }
+    }
+    metrics.unassigned = rows.filter((r) => !assigned.has(r.id)).length;
+    metrics.assignedToMe = input.officerId
+      ? rows.filter((r) => assigned.get(r.id) === input.officerId).length
+      : 0;
   }
 
   const sortDesc = (m: Map<string, number>) =>
@@ -1642,6 +1892,7 @@ export async function govDashboardMetrics(
     threatDistribution: sortDesc(tc),
     riskDistribution: sortDesc(rc),
     statusDistribution: sortDesc(sc),
+    scope: describeGovScopeFilter(scope),
   };
 }
 
@@ -1690,6 +1941,8 @@ export async function govDashboardFilterOptions(
 
 export interface GovTrendsResult {
   rangeLabel: string;
+  /** Bucket resolution actually used for casesOverTime ("week" past 120d). */
+  bucket: "day" | "week";
   casesOverTime: Array<{ day: string; count: number }>;
   byStatus: Array<{ label: string; count: number }>;
   byRisk: Array<{ label: string; count: number }>;
@@ -1699,16 +1952,26 @@ export interface GovTrendsResult {
   totals: { total: number; prevPeriod: number; changePct: number | null };
 }
 
+export interface GovTrendsFilters {
+  threatCategory?: string | null;
+  riskLevel?: string | null;
+  govStatus?: string | null;
+  stateCode?: string | null;
+  districtCode?: string | null;
+}
+
 export async function govTrends(
   scope: GovScopeFilter,
   from: string,
   to: string,
   prevFrom: string,
   prevTo: string,
+  filters: GovTrendsFilters = {},
 ): Promise<GovTrendsResult> {
   if (isScopeEmpty(scope)) {
     return {
       rangeLabel: "—",
+      bucket: "day",
       casesOverTime: [],
       byStatus: [],
       byRisk: [],
@@ -1722,8 +1985,17 @@ export async function govTrends(
   const sb = getSupabaseServer();
   let base = sb
     .from("cases")
-    .select("id,created_at,gov_status,risk_level,threat_category,state_code");
+    .select("id,created_at,gov_status,risk_level,threat_category,state_code,district_code");
   base = applyGovScopeFilter(base, scope);
+  // Exact-match filters narrow the scoped query server-side. Threat category
+  // is deliberately NOT filtered here: stored values use legacy vocabularies
+  // and are mapped to the canonical catalogue at read time, so an exact DB
+  // predicate would silently drop aliased rows. It is applied below on the
+  // already-scoped rows instead (documented, not silent).
+  if (filters.riskLevel) base = base.eq("risk_level", filters.riskLevel);
+  if (filters.govStatus) base = base.eq("gov_status", filters.govStatus);
+  if (filters.stateCode) base = base.eq("state_code", filters.stateCode);
+  if (filters.districtCode) base = base.eq("district_code", filters.districtCode);
   const { data, error } = await base;
   throwIfError(error, "Failed to load trends data.");
 
@@ -1734,19 +2006,25 @@ export async function govTrends(
     risk_level: string | null;
     threat_category: string | null;
     state_code: string | null;
+    district_code: string | null;
   }>;
 
-  const inCurrent = rowsVec.filter((r) => r.created_at >= from && r.created_at <= to);
-  const inPrev = rowsVec.filter((r) => r.created_at >= prevFrom && r.created_at <= prevTo);
+  const threatOk = (r: (typeof rowsVec)[number]) =>
+    !filters.threatCategory || displayThreatCategory(r.threat_category) === filters.threatCategory;
+
+  const inCurrent = rowsVec.filter((r) => r.created_at >= from && r.created_at <= to && threatOk(r));
+  const inPrev = rowsVec.filter((r) => r.created_at >= prevFrom && r.created_at <= prevTo && threatOk(r));
 
   const dayMap = new Map<string, number>();
   for (const r of inCurrent) {
     const day = r.created_at.slice(0, 10);
     dayMap.set(day, (dayMap.get(day) ?? 0) + 1);
   }
-  const casesOverTime = [...dayMap.entries()]
-    .map(([day, count]) => ({ day, count }))
-    .sort((a, b) => (a.day < b.day ? -1 : 1));
+  // Zero-filled buckets across the whole window (Phase 21): every day in
+  // [from, to] appears exactly once, so the bucket sum reconciles exactly
+  // with the selected-window case count. Spans over 120 days use weekly
+  // buckets (Monday-start keys) for readability; the sum still reconciles.
+  const casesOverTime = buildTimeBuckets(from, to, dayMap);
 
   const groupOf = <K extends string>(rows: typeof rowsVec, pick: (r: (typeof rowsVec)[number]) => K) => {
     const m = new Map<K, number>();
@@ -1761,7 +2039,9 @@ export async function govTrends(
   const changePct =
     prevTotal === 0 ? null : Math.round(((inCurrent.length - prevTotal) / prevTotal) * 100);
 
-  // Indicator recurrence across cases in the window.
+  // Indicator recurrence across cases in the window. Historic
+  // qp-garbage values are excluded (see govSearchIndicators): recurrence
+  // counts real IOCs only, without deleting the underlying rows.
   let indicatorRecurrence: GovTrendsResult["indicatorRecurrence"] = [];
   {
     const inIds = new Set(inCurrent.map((r) => r.id));
@@ -1774,6 +2054,7 @@ export async function govTrends(
         const m = new Map<string, { value: string; type: string; cases: Set<string>; firstSeen: string | null; lastSeen: string | null }>();
         for (const i of (inds ?? []) as Array<{ value: string; type: string; case_id: string | null; created_at: string }>) {
           if (!i.case_id) continue;
+          if (!isWellFormedIndicator(i.type, i.value)) continue;
           const key = `${i.type}|${i.value}`;
           const rec = m.get(key) ?? { value: i.value, type: i.type, cases: new Set<string>(), firstSeen: i.created_at, lastSeen: i.created_at };
           rec.cases.add(i.case_id);
@@ -1792,13 +2073,15 @@ export async function govTrends(
 
   return {
     rangeLabel: `${from} → ${to}`,
+    bucket: timeBucketResolution(from, to),
     casesOverTime,
     byStatus: groupOf(inCurrent, (r) => govStatusLabel(r.gov_status)),
     byRisk: groupOf(inCurrent, (r) => r.risk_level ?? "Unset"),
     // Canonical threat mapping + normalized state labels: lowercase and
     // surrounding-whitespace variants of the same code aggregate together
-    // instead of fragmenting. Shape-valid codes stay unverified here.
-    byThreat: groupOf(inCurrent, (r) => mapLegacyThreatCategory(r.threat_category).category),
+    // instead of fragmenting. Unclassifiable values aggregate under
+    // "Unclassified". Shape-valid codes stay unverified here.
+    byThreat: groupOf(inCurrent, (r) => displayThreatCategory(r.threat_category)),
     byState: groupOf(inCurrent, (r) => {
       const n = normalizeGovStateCode(r.state_code);
       return n.valid && n.value ? n.value : "Unknown";
@@ -1830,6 +2113,10 @@ export interface GovReportDataset {
   generatedAt: string;
   filters: GovReportFilters;
   rows: Array<{
+    /** Case UUID: required to open (unseal) the per-case report. The UUID
+     * alone grants nothing — unseal re-checks session, report.generate,
+     * case.view, and scope server-side. */
+    id: string;
     caseNumber: string;
     createdAt: string;
     state: string | null;
@@ -1868,13 +2155,13 @@ export async function govReportDataset(
   throwIfError(error, "Failed to generate report dataset.");
 
   const rows = ((data ?? []) as RawGovCaseRow[]).map(toGovCaseView);
-  const officerIds = rows.map((r) => r.assignedOfficer?.officerId).filter((x): x is string => Boolean(x));
-  const withNames = await attachAssignments(rows, await officerNameMap([...new Set(officerIds)]));
+  const withNames = await attachAssignmentsWithNames(rows);
 
   return {
     generatedAt: new Date().toISOString(),
     filters,
     rows: withNames.map((r) => ({
+      id: r.id,
       caseNumber: r.caseNumber,
       createdAt: r.createdAt,
       state: r.stateCode,

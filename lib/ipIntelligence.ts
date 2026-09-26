@@ -1,5 +1,6 @@
 import { IPIntelligence } from "./emailTypes";
 import { TtlLruCache } from "./intel/geoCache";
+import { lookupIpGeo } from "./intel/ipgeo";
 
 interface IpApiResponse {
   ip?: string;
@@ -87,6 +88,28 @@ export async function lookupIpIntelligence(
 
   const cached = cache.get(ip);
   if (cached) return cached;
+
+  // Preferred: keyed ipgeolocation.io (accurate city/lat-lon). It carries
+  // no ASN/org, so a keyed hit without org keeps org/asn undefined rather
+  // than borrowing them from elsewhere.
+  try {
+    const keyed = await lookupIpGeo({ indicator: ip, indicatorType: "ip" });
+    if (keyed.status === "CONNECTED_DATA" && keyed.geo) {
+      const g = keyed.geo;
+      const result: IPIntelligence = {
+        ip,
+        country: g.country ?? undefined,
+        region: g.region ?? undefined,
+        city: g.city ?? undefined,
+        organization: undefined,
+        asn: undefined,
+      };
+      cache.set(ip, result);
+      return result;
+    }
+  } catch {
+    // Fall through to the keyless provider below.
+  }
 
   const result = await fetchIpGeo(ip);
   if (result) cache.set(ip, result);

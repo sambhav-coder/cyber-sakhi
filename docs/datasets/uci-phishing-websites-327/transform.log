@@ -1,0 +1,6 @@
+source arff: C:\Users\ry526\AppData\Local\Temp\opencode\datasets\uci-phishing-327\Training Dataset.arff
+attributes observed: 31 (expected 31 = 30 features + Result)
+data rows observed: 11055
+arff sha256: 3BCF93B1612306537EE2737751F1BAC185B2A77886AB376644C3BF0C7F7CB3E6
+imported: 11055, rejected: 0 {}
+Result distribution: phishing(-1)=4898, legitimate(1)=6157

@@ -1,0 +1,11 @@
+{
+  "batch_id": "ext-20260925-manual01",
+  "synced_at": "2026-09-25T14:46:11.773Z",
+  "mode": "manual",
+  "status_by_source": {
+    "urlhaus-csv-recent": "synced",
+    "tweetfeed-week": "synced",
+    "feodo-ipblocklist": "synced-stale-feed"
+  },
+  "next": "scheduled sync architecture: cron/edge-function re-runs this script with --since watermark (sync-state.json); manual run only for now"
+}

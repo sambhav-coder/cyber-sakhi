@@ -117,3 +117,17 @@ export function mapLegacyThreatCategory(
   if (aliased !== undefined) return { category: aliased, matched: true };
   return { category: "OTHER", matched: false };
 }
+
+/**
+ * Honest display label for a stored threat_category value. A value that was
+ * never reliably classifiable (null, empty, unknown, or an out-of-catalogue
+ * legacy label) renders as "Unclassified" — it must not borrow the
+ * canonical OTHER bucket, which is reserved for cases an officer
+ * deliberately classified as OTHER. Pure: no I/O, unit-testable.
+ */
+export const GOV_UNCLASSIFIED_LABEL = "Unclassified" as const;
+
+export function displayThreatCategory(value: string | null | undefined): string {
+  const m = mapLegacyThreatCategory(value);
+  return m.matched ? m.category : GOV_UNCLASSIFIED_LABEL;
+}
