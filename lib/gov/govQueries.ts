@@ -23,7 +23,6 @@ import {
   normalizeGovDistrict,
   normalizeGovLocality,
   normalizeGovStateCode,
-  normalizeGovSubDivision,
 } from "./govJurisdictions";
 import type { GovOfficerRow } from "./govCredentials";
 import { GOV_STATE_JURISDICTIONS } from "./govOfficerCode";
@@ -1175,6 +1174,10 @@ export interface GovGeoSummary {
      * code/label/metric and ignore this field.
      */
     categories: Array<{ label: string; count: number }>;
+    /** Aggregate-only distributions from the same scoped case rows. */
+    risks?: Array<{ label: string; count: number }>;
+    statuses?: Array<{ label: string; count: number }>;
+    sources?: Array<{ label: string; count: number }>;
   }>;
   total: GovGeoMetric;
   threatBreakdown?: Array<{ label: string; count: number }>;
@@ -1201,6 +1204,8 @@ export async function govGeoSummary(opts: {
   scope: GovScopeFilter;
   state: string | null;
   district: string | null;
+  /** Exact, case-reported locality filter for city/locality detail. */
+  locality?: string | null;
   from?: string | null;
   to?: string | null;
   casesLimit?: number;
@@ -1231,14 +1236,15 @@ export async function govGeoSummary(opts: {
   }
 
   const groupField =
-    opts.state === null ? "state_code" : opts.district === null ? "district_code" : "sub_division";
+    opts.state === null ? "state_code" : opts.district === null ? "district_code" : "locality";
 
   let q = getSupabaseServer()
     .from("cases")
-    .select(`id,created_at,risk_level,threat_category,gov_status,${groupField},state_code,district_code,sub_division,locality`);
+    .select(`id,case_number,created_at,risk_level,threat_category,gov_status,case_source,${groupField},state_code,district_code,sub_division,locality`);
   q = applyGovScopeFilter(q, opts.scope);
   if (opts.state) q = q.eq("state_code", opts.state);
   if (opts.district) q = q.eq("district_code", opts.district);
+  if (opts.locality) q = q.eq("locality", opts.locality);
   if (opts.from) q = q.gte("created_at", opts.from);
   if (opts.to) q = q.lte("created_at", opts.to);
   const { data, error } = await q;
@@ -1247,10 +1253,12 @@ export async function govGeoSummary(opts: {
 
   const rowsVec = (data ?? []) as Array<{
     id: string;
+    case_number: string;
     created_at: string;
     risk_level: string | null;
     threat_category: string | null;
     gov_status: string;
+    case_source: string | null;
     state_code: string | null;
     district_code: string | null;
     sub_division: string | null;
@@ -1275,8 +1283,6 @@ export async function govGeoSummary(opts: {
       const n = normalizeGovDistrict(row.district_code);
       return n.valid && n.value ? n.value : "UNKNOWN";
     }
-    const sub = normalizeGovSubDivision(row.sub_division);
-    if (sub.valid && sub.value) return sub.value;
     const loc = normalizeGovLocality(row.locality);
     if (loc.valid && loc.value) return loc.value;
     return "UNKNOWN";
@@ -1284,6 +1290,9 @@ export async function govGeoSummary(opts: {
 
   const map = new Map<string, GovGeoMetric>();
   const perRegionCategories = new Map<string, Map<string, number>>();
+  const perRegionRisks = new Map<string, Map<string, number>>();
+  const perRegionStatuses = new Map<string, Map<string, number>>();
+  const perRegionSources = new Map<string, Map<string, number>>();
   const totals: GovGeoMetric = { cases: 0, new7d: 0, highRisk: 0, open: 0 };
   let unlocated = 0;
   let invalidOrIncomplete = 0;
@@ -1307,6 +1316,15 @@ export async function govGeoSummary(opts: {
     const catMap = perRegionCategories.get(key) ?? new Map<string, number>();
     catMap.set(cat, (catMap.get(cat) ?? 0) + 1);
     perRegionCategories.set(key, catMap);
+
+    const increment = (container: Map<string, Map<string, number>>, label: string) => {
+      const values = container.get(key) ?? new Map<string, number>();
+      values.set(label, (values.get(label) ?? 0) + 1);
+      container.set(key, values);
+    };
+    increment(perRegionRisks, row.risk_level ?? "Unknown");
+    increment(perRegionStatuses, row.gov_status || "Unknown");
+    increment(perRegionSources, row.case_source?.trim() || "Unknown");
 
     // Excluded-count diagnostics from the raw jurisdiction pair. Stored
     // rows are never rewritten; this only labels what the grouping above
@@ -1332,6 +1350,12 @@ export async function govGeoSummary(opts: {
       categories: [...(perRegionCategories.get(code) ?? new Map<string, number>()).entries()]
         .map(([label, count]) => ({ label, count }))
         .sort((a, b) => b.count - a.count),
+      risks: [...(perRegionRisks.get(code) ?? new Map<string, number>()).entries()]
+        .map(([label, count]) => ({ label, count })).sort((a, b) => b.count - a.count),
+      statuses: [...(perRegionStatuses.get(code) ?? new Map<string, number>()).entries()]
+        .map(([label, count]) => ({ label, count })).sort((a, b) => b.count - a.count),
+      sources: [...(perRegionSources.get(code) ?? new Map<string, number>()).entries()]
+        .map(([label, count]) => ({ label, count })).sort((a, b) => b.count - a.count),
     }))
     .sort((a, b) => b.metric.cases - a.metric.cases);
 
@@ -1363,7 +1387,7 @@ export async function govGeoSummary(opts: {
       .map((r) =>
         toGovCaseView({
           id: r.id,
-          case_number: "",
+          case_number: r.case_number,
           title: null,
           description: null,
           threat_type: null,
@@ -1382,7 +1406,7 @@ export async function govGeoSummary(opts: {
           incident_channel: null,
           loss_amount: null,
           currency: null,
-          case_source: null,
+          case_source: r.case_source,
           created_by: null,
         }),
       );

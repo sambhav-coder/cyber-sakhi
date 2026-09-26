@@ -11,7 +11,6 @@ import {
 } from "@/lib/gov/govMapDisplay";
 import {
   displayNameForGeoName,
-  illustrativeAccentForName,
   resolveMapDisplayMode,
   type GovCameraPresetName,
 } from "@/lib/gov/govGeo3D";
@@ -41,6 +40,9 @@ type AggRow = {
   label: string;
   metric: Metric;
   categories?: Array<{ label: string; count: number }>;
+  risks?: Array<{ label: string; count: number }>;
+  statuses?: Array<{ label: string; count: number }>;
+  sources?: Array<{ label: string; count: number }>;
 };
 interface DistrictGeoFeature {
   type: "Feature";
@@ -69,6 +71,9 @@ type GeoResult = {
     threatCategory: string | null;
     riskLevel: string | null;
     govStatus: string;
+    caseSource?: string | null;
+    createdAt?: string;
+    locality?: string | null;
   }>;
   generatedAt?: string;
   source?: string;
@@ -87,6 +92,20 @@ const PRESETS: GovCameraPresetName[] = ["TOP", "FRONT", "RIGHT", "BACK", "LEFT",
 const AUTO_REFRESH_MS = 60000;
 // Layer-off neutral: the legend's documented zero/no-data color, never invented.
 const NEUTRAL_FILL: string = GOV_MAP_VOLUME_LEGEND.find((e) => e.level === "none")?.fill ?? "#475569";
+
+function Distribution({ label, values }: { label: string; values?: Array<{ label: string; count: number }> }) {
+  if (!values || values.length === 0) return null;
+  return <p className="mt-1 text-xs leading-snug text-slate-300"><span className="text-slate-500">{label}: </span>{values.map((item) => `${item.label} ${item.count}`).join(" · ")}</p>;
+}
+
+function AggregateBreakdown({ row }: { row: AggRow }) {
+  return <>
+    <p className="mt-0.5 font-mono text-lg text-teal-200">{row.metric.cases} <span className="font-sans text-xs font-normal text-slate-400">cases</span></p>
+    <Distribution label="Risk" values={row.risks} />
+    <Distribution label="Threat" values={row.categories} />
+    <Distribution label="Status" values={row.statuses} />
+  </>;
+}
 
 export function GovGeographyView({ canViewCases = false, initialSelected = null }: { canViewCases?: boolean; initialSelected?: string | null }) {
   const router = useRouter();
@@ -108,6 +127,8 @@ export function GovGeographyView({ canViewCases = false, initialSelected = null 
   const [drill, setDrill] = useState<GeoResult | null>(null);
   const [drillDistrict, setDrillDistrict] = useState<string | null>(null);
   const [drillDetail, setDrillDetail] = useState<GeoResult | null>(null);
+  const [drillLocality, setDrillLocality] = useState<string | null>(null);
+  const [localityDetail, setLocalityDetail] = useState<GeoResult | null>(null);
   const [flyingTo, setFlyingTo] = useState<string | null>(null);
   const [reducedMotion, setReducedMotion] = useState(false);
   const [showCases, setShowCases] = useState(true);
@@ -245,7 +266,10 @@ export function GovGeographyView({ canViewCases = false, initialSelected = null 
         const joined = join.byGeoName.get(name);
         map.set(name, volumeFillForCount(joined?.metric[metric] ?? 0, Math.max(1, maxMetric)));
       } else {
-        map.set(name, illustrativeAccentForName(name));
+        // A boundary with no verified case aggregate is deliberately neutral.
+        // Decorative colouring would imply a location-derived signal that does
+        // not exist in the authorized case data.
+        map.set(name, NEUTRAL_FILL);
       }
     }
     return map;
@@ -319,6 +343,8 @@ export function GovGeographyView({ canViewCases = false, initialSelected = null 
       setDrill(null);
       setDrillDistrict(null);
       setDrillDetail(null);
+      setDrillLocality(null);
+      setLocalityDetail(null);
       // Drill state survives refresh/back via ?state= (replace: no history spam).
       router.replace(`/gov/geography${name ? `?state=${encodeURIComponent(name)}` : ""}`, { scroll: false });
       if (!name) return;
@@ -352,6 +378,8 @@ export function GovGeographyView({ canViewCases = false, initialSelected = null 
       if (!stateCode) return;
       setDrillDistrict(districtCode);
       setDrillDetail(null);
+      setDrillLocality(null);
+      setLocalityDetail(null);
       try {
         const r = await fetch(
           `/gov/api/geo?state=${encodeURIComponent(stateCode)}&district=${encodeURIComponent(districtCode)}`,
@@ -363,6 +391,25 @@ export function GovGeographyView({ canViewCases = false, initialSelected = null 
       }
     },
     [selected, primaryCodeByGeo],
+  );
+
+  const openLocality = useCallback(
+    async (locality: string) => {
+      const stateCode = selected ? primaryCodeByGeo.get(selected)?.code : null;
+      if (!stateCode || !drillDistrict) return;
+      setDrillLocality(locality);
+      setLocalityDetail(null);
+      try {
+        const r = await fetch(
+          `/gov/api/geo?state=${encodeURIComponent(stateCode)}&district=${encodeURIComponent(drillDistrict)}&locality=${encodeURIComponent(locality)}`,
+          { cache: "no-store" },
+        );
+        if (r.ok) setLocalityDetail(await r.json());
+      } catch {
+        /* The selected case-reported locality remains visible; no location is inferred. */
+      }
+    },
+    [selected, primaryCodeByGeo, drillDistrict],
   );
 
   // PART 17 transition: from the India level, a state click first flies the
@@ -391,6 +438,9 @@ export function GovGeographyView({ canViewCases = false, initialSelected = null 
   }, []);
 
   const hoveredAgg = hover ? join.byGeoName.get(hover.name) ?? null : null;
+  const hoveredStateRow = hover
+    ? (data?.rows ?? []).find((row) => STATE_CODE_TO_GEO_NAME[row.code] === hover.name) ?? null
+    : null;
   // District tooltip aggregates come from the scoped district drill-down
   // (officer district codes); geometry names that match no aggregate row
   // honestly show "no scoped aggregate" instead of a zero.
@@ -649,15 +699,7 @@ export function GovGeographyView({ canViewCases = false, initialSelected = null 
               {mode === "live-data" ? (
                 selected ? (
                   hoveredDistrictAgg ? (
-                    <>
-                      <p className="mt-0.5 font-mono text-lg text-teal-200">
-                        {hoveredDistrictAgg.metric.cases} <span className="font-sans text-xs font-normal text-slate-400">cases</span>
-                      </p>
-                      <p className="mt-1 text-xs text-slate-300">
-                        New 7d {hoveredDistrictAgg.metric.new7d} · High risk {hoveredDistrictAgg.metric.highRisk} · Open{" "}
-                        {hoveredDistrictAgg.metric.open}
-                      </p>
-                    </>
+                    <AggregateBreakdown row={hoveredDistrictAgg} />
                   ) : (
                     <p className="mt-1 text-xs text-slate-400">
                       No scoped aggregate for this district shape — see the district list for officer-code aggregates.
@@ -666,14 +708,7 @@ export function GovGeographyView({ canViewCases = false, initialSelected = null 
                 ) : (
                   <>
                     {hoveredAgg ? (
-                      <>
-                        <p className="mt-0.5 font-mono text-lg text-teal-200">
-                          {hoveredAgg.totalCases} <span className="font-sans text-xs font-normal text-slate-400">cases</span>
-                        </p>
-                        <p className="mt-1 text-xs text-slate-300">
-                          New 7d {hoveredAgg.metric.new7d} · High risk {hoveredAgg.metric.highRisk} · Open {hoveredAgg.metric.open}
-                        </p>
-                      </>
+                      <AggregateBreakdown row={hoveredStateRow ?? { code: hoveredAgg.geoName, label: hoveredAgg.geoName, metric: hoveredAgg.metric }} />
                     ) : (
                       <p className="mt-1 text-xs text-slate-400">
                         Verified geographic case data unavailable for this region.
@@ -729,14 +764,32 @@ export function GovGeographyView({ canViewCases = false, initialSelected = null 
                     <button
                       type="button"
                       onClick={() => {
+                        if (drillLocality) {
+                          setDrillLocality(null);
+                          setLocalityDetail(null);
+                          return;
+                        }
                         setDrillDistrict(null);
                         setDrillDetail(null);
                       }}
                       className="mb-2 rounded border border-slate-700 px-2 py-0.5 text-xs text-slate-300"
                     >
-                      ← Districts
+                      {drillLocality ? "← Localities" : "← Districts"}
                     </button>
-                    <h4 className="text-xs font-semibold uppercase tracking-wide text-slate-400">{drillDistrict} — localities</h4>
+                    {drillLocality ? (
+                      <div>
+                        <h4 className="text-xs font-semibold uppercase tracking-wide text-slate-400">{drillLocality} — locality detail</h4>
+                        {!localityDetail ? <p className="mt-2 text-xs text-slate-500">Loading locality cases…</p> : <div>
+                          <p className="mt-2 font-mono text-lg text-teal-200">{localityDetail.total.cases} <span className="font-sans text-xs font-normal text-slate-400">cases</span></p>
+                          <Distribution label="Risk" values={localityDetail.riskBreakdown} />
+                          <Distribution label="Threat" values={localityDetail.threatBreakdown} />
+                          <p className="mt-2 text-[10px] leading-relaxed text-slate-500">No verified city boundary or coordinate is available for this case-reported locality, so this detail view does not draw an invented point or boundary.</p>
+                          {canViewCases && <ul className="mt-3 divide-y divide-slate-800 text-xs">{(localityDetail.cases ?? []).map((c) => <li key={c.id} className="py-2 text-slate-300"><Link className="font-mono text-teal-300" href={`/gov/cases/${c.id}`}>{c.caseNumber || c.id.slice(0, 8)}</Link><span className="ml-2 text-slate-500">{c.createdAt ? new Date(c.createdAt).toLocaleDateString("en-IN") : "—"} · {c.riskLevel ?? "Unknown"} · {c.threatCategory ?? "Unclassified"} · {c.govStatus}</span></li>)}</ul>}
+                        </div>}
+                      </div>
+                    ) : (
+                    <div>
+                    <h4 className="text-xs font-semibold uppercase tracking-wide text-slate-400">{drillDistrict} — case-reported localities</h4>
                     {!drillDetail ? (
                       <p className="mt-2 text-xs text-slate-500">Loading…</p>
                     ) : (
@@ -746,19 +799,17 @@ export function GovGeographyView({ canViewCases = false, initialSelected = null 
                             const needle = placeQuery.trim().toLowerCase();
                             return !needle || r.label.toLowerCase().includes(needle) || r.code.toLowerCase().includes(needle);
                           }).map((r) => (
-                            <li key={r.code} className="flex items-center justify-between gap-2 text-xs text-slate-300">
-                              <span className="truncate">{r.label}</span>
-                              <span className="font-mono">{r.metric.cases}</span>
-                            </li>
+                            <li key={r.code}><button type="button" onClick={() => void openLocality(r.code)} className="flex w-full items-center justify-between gap-2 rounded px-1 py-1 text-left text-xs text-slate-300 hover:bg-slate-800/70">
+                              <span className="truncate">{r.label}</span><span className="font-mono">{r.metric.cases}</span>
+                            </button></li>
                           ))}
                           {(drillDetail.rows ?? []).length === 0 && (
                             <li className="text-xs text-slate-500">No located rows.</li>
                           )}
                         </ul>
                         <p className="mt-2 text-[10px] leading-relaxed text-slate-500">
-                          City view: no verified city polygons exist for this district, so no
-                          points are rendered and none are invented. Localities above come
-                          from scoped aggregates only.
+                          These are exact case-reported locality values. No verified city polygons or
+                          coordinates exist in this dataset, so no points or boundaries are invented.
                         </p>
                         {canViewCases ? (
                           (drillDetail.cases ?? []).length > 0 && (
@@ -792,6 +843,8 @@ export function GovGeographyView({ canViewCases = false, initialSelected = null 
                           </p>
                         )}
                       </>
+                    )}
+                    </div>
                     )}
                   </>
                 ) : (
