@@ -1,4 +1,5 @@
 import { decryptGmailToken } from "./gmailToken";
+import { getGmailOAuthCredentials } from "./gmailOAuth";
 
 export interface GmailTokenPayload {
   accessToken: string;
@@ -23,12 +24,7 @@ export function parseGmailToken(
 export async function refreshGmailAccessToken(
   refreshToken: string
 ): Promise<GmailTokenPayload> {
-  const clientId = process.env.GOOGLE_GMAIL_CLIENT_ID;
-  const clientSecret = process.env.GOOGLE_GMAIL_CLIENT_SECRET;
-
-  if (!clientId || !clientSecret) {
-    throw new Error("Gmail OAuth credentials are not configured.");
-  }
+  const { clientId, clientSecret } = getGmailOAuthCredentials();
 
   const response = await fetch(
     "https://oauth2.googleapis.com/token",

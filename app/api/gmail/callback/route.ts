@@ -6,6 +6,11 @@ import {
   encryptGmailToken,
   getGmailTokenCookieName,
 } from "@/lib/gmailToken";
+import {
+  getGmailOAuthCredentials,
+  getGmailRedirectUri,
+  gmailOAuthErrorMessage,
+} from "@/lib/gmailOAuth";
 
 const GMAIL_STATE_COOKIE = "cyber_sakhi_gmail_oauth_state";
 
@@ -24,7 +29,7 @@ export async function GET(req: NextRequest) {
   if (!returnedState || !storedState) {
     return NextResponse.redirect(
       new URL(
-        "/dashboard?gmail_error=OAuth%20state%20missing",
+        "/email-forensics/gmail?gmail_error=OAuth%20state%20missing",
         req.url
       )
     );
@@ -40,7 +45,7 @@ export async function GET(req: NextRequest) {
   if (!statesMatch) {
     return NextResponse.redirect(
       new URL(
-        "/dashboard?gmail_error=Invalid%20OAuth%20state",
+        "/email-forensics/gmail?gmail_error=Invalid%20OAuth%20state",
         req.url
       )
     );
@@ -52,7 +57,7 @@ export async function GET(req: NextRequest) {
   if (error) {
     return NextResponse.redirect(
       new URL(
-        `/dashboard?gmail_error=${encodeURIComponent(error)}`,
+        `/email-forensics/gmail?gmail_error=${encodeURIComponent(gmailOAuthErrorMessage(error))}`,
         req.url
       )
     );
@@ -61,16 +66,19 @@ export async function GET(req: NextRequest) {
   if (!code) {
     return NextResponse.redirect(
       new URL(
-        "/dashboard?gmail_error=Authorization%20code%20missing",
+        "/email-forensics/gmail?gmail_error=Authorization%20code%20missing",
         req.url
       )
     );
   }
 
-  const clientId = process.env.GOOGLE_GMAIL_CLIENT_ID;
-  const clientSecret = process.env.GOOGLE_GMAIL_CLIENT_SECRET;
-
-  if (!clientId || !clientSecret) {
+  let clientId: string;
+  let clientSecret: string;
+  let redirectUri: string;
+  try {
+    ({ clientId, clientSecret } = getGmailOAuthCredentials());
+    redirectUri = getGmailRedirectUri();
+  } catch {
     return NextResponse.json(
       {
         error: "Gmail OAuth is not configured on the server.",
@@ -78,8 +86,6 @@ export async function GET(req: NextRequest) {
       { status: 500 }
     );
   }
-
-  const redirectUri = `${req.nextUrl.origin}/api/gmail/callback`;
 
   const tokenResponse = await fetch(
     "https://oauth2.googleapis.com/token",
@@ -99,14 +105,10 @@ export async function GET(req: NextRequest) {
   );
 
   if (!tokenResponse.ok) {
-    const errorText = await tokenResponse.text();
-
-    return NextResponse.json(
-      {
-        error: "Failed to exchange Google authorization code.",
-        details: errorText,
-      },
-      { status: 500 }
+    // Do not reflect Google's response: it can contain implementation and
+    // account details. The user can safely retry from the Gmail page.
+    return NextResponse.redirect(
+      new URL("/email-forensics/gmail?gmail_error=Authorization%20could%20not%20be%20completed.", req.url)
     );
   }
 

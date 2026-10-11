@@ -107,11 +107,9 @@ export async function GET(req: NextRequest) {
       });
 
       if (!response.ok) {
-        const errorText = await response.text();
         return NextResponse.json(
           {
             error: "Failed to fetch Gmail messages.",
-            details: errorText,
           },
           { status: response.status }
         );
@@ -209,7 +207,6 @@ export async function GET(req: NextRequest) {
     return NextResponse.json(
       {
         error: "Gmail message request failed.",
-        details: error instanceof Error ? error.message : String(error),
       },
       { status: 500 }
     );

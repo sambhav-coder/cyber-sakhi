@@ -2,6 +2,11 @@ import crypto from "crypto";
 import { NextRequest, NextResponse } from "next/server";
 import { getServerSession } from "next-auth";
 import { authOptions } from "@/lib/authOptions";
+import {
+  getGmailOAuthCredentials,
+  getGmailReadonlyScope,
+  getGmailRedirectUri,
+} from "@/lib/gmailOAuth";
 
 const GMAIL_STATE_COOKIE = "cyber_sakhi_gmail_oauth_state";
 
@@ -14,10 +19,12 @@ export async function GET(req: NextRequest) {
     );
   }
 
-  const clientId = process.env.GOOGLE_GMAIL_CLIENT_ID;
-  const clientSecret = process.env.GOOGLE_GMAIL_CLIENT_SECRET;
-
-  if (!clientId || !clientSecret) {
+  let clientId: string;
+  let redirectUri: string;
+  try {
+    ({ clientId } = getGmailOAuthCredentials());
+    redirectUri = getGmailRedirectUri();
+  } catch {
     return NextResponse.json(
       { error: "Gmail OAuth is not configured on the server." },
       { status: 500 }
@@ -28,13 +35,11 @@ export async function GET(req: NextRequest) {
   // to protect the OAuth callback against CSRF.
   const state = crypto.randomBytes(32).toString("hex");
 
-  const redirectUri = `${req.nextUrl.origin}/api/gmail/callback`;
-
   const params = new URLSearchParams({
     client_id: clientId,
     redirect_uri: redirectUri,
     response_type: "code",
-    scope: "https://www.googleapis.com/auth/gmail.readonly",
+    scope: getGmailReadonlyScope(),
     access_type: "offline",
     prompt: "consent",
     include_granted_scopes: "true",
