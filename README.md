@@ -10,7 +10,7 @@
 [![Google Gemini](https://img.shields.io/badge/Google_Gemini-3.5_Flash-8E75B2?style=for-the-badge&logo=google)](https://ai.google.dev/)
 [![Vitest](https://img.shields.io/badge/Vitest-2.1.9-6E9F18?style=for-the-badge&logo=vitest)](https://vitest.dev/)
 
-**Built for the Smart India Hackathon (SIH)** · *Empowering citizens against cyber harassment and enabling rapid forensic response.*
+ *Empowering citizens against cyber harassment and enabling rapid forensic response.*
 
 ```mermaid
 flowchart LR
