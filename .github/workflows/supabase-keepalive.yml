@@ -1,0 +1,117 @@
+# Supabase Keep-Alive (Read-Only Health Check)
+#
+# Purpose: generate one genuine, minimal, read-only database query twice per
+# day so a Free-plan Supabase project sees regular user database activity.
+# See: https://supabase.com/docs/guides/platform/free-project-pausing
+#
+# Least-privilege design:
+#   * ONE SELECT against public.supabase_keepalive_heartbeat (single static
+#     row, no PII, no application data). See
+#     supabase/migrations/supabase_keepalive_heartbeat.sql.
+#   * Uses the publishable/anon key ONLY. NEVER uses SUPABASE_SERVICE_ROLE_KEY,
+#     secret keys, or Management API tokens.
+#   * No INSERT / UPDATE / DELETE / TRUNCATE / DDL, no admin endpoints, no
+#     login/session creation. A single GET is issued per run; no retries.
+#
+# Required GitHub repository secrets (NAME ONLY — never commit values):
+#   * SUPABASE_URL       — e.g. https://xyzcompany.supabase.co
+#                          (same value as the app's NEXT_PUBLIC_SUPABASE_URL)
+#   * SUPABASE_ANON_KEY  — the Supabase publishable/anon key
+#                          (same value as NEXT_PUBLIC_SUPABASE_PUBLISHABLE_KEY)
+#
+# Schedule: 02:00 and 14:00 UTC daily (~12h apart).
+# Manual run: Actions tab → "Supabase Keep-Alive (Read-Only)" → Run workflow.
+#
+# Failure semantics:
+#   * HTTP 200 + row payload  → PASS (database query genuinely succeeded).
+#   * HTTP 401/403            → FAIL (auth/permission: wrong anon key or the
+#                              heartbeat migration has not been applied).
+#   * HTTP 404                → FAIL (table missing: apply the migration).
+#   * Connection/timeout/5xx  → FAIL (project unreachable or paused — the
+#                              owner must resume it in the Supabase Dashboard;
+#                              this workflow never attempts auto-resume).
+#   * Secrets are never printed; only status codes and non-sensitive hints.
+#
+# Limitation: Supabase documents pausing for "low activity over a 7-day
+# period" without publishing an exact query-count threshold ("a few user
+# requests to the database each day" is typically enough). This check is
+# consistent with that policy but cannot permanently guarantee prevention.
+
+name: Supabase Keep-Alive (Read-Only)
+
+on:
+  schedule:
+    - cron: "0 2 * * *"
+    - cron: "0 14 * * *"
+  workflow_dispatch: {}
+
+permissions:
+  contents: read
+
+jobs:
+  keepalive:
+    name: Read-only heartbeat query
+    runs-on: ubuntu-latest
+    timeout-minutes: 2
+    steps:
+      - name: Query heartbeat table (single SELECT, no retries)
+        env:
+          SUPABASE_URL: ${{ secrets.SUPABASE_URL }}
+          SUPABASE_ANON_KEY: ${{ secrets.SUPABASE_ANON_KEY }}
+        run: |
+          set -euo pipefail
+
+          if [ -z "${SUPABASE_URL:-}" ]; then
+            echo "FAIL: missing SUPABASE_URL secret. Configure it in the repository settings (value = Supabase project URL)."
+            exit 1
+          fi
+          if [ -z "${SUPABASE_ANON_KEY:-}" ]; then
+            echo "FAIL: missing SUPABASE_ANON_KEY secret. Configure it in the repository settings (value = Supabase publishable/anon key). Never use the service-role key here."
+            exit 1
+          fi
+
+          ENDPOINT="${SUPABASE_URL%/}/rest/v1/supabase_keepalive_heartbeat?select=id,heartbeat_at&limit=1"
+          echo "Checking read-only heartbeat query (one GET, 20s max)..."
+
+          TMP_BODY="$(mktemp)"
+          trap 'rm -f "$TMP_BODY"' EXIT
+
+          # Single attempt only — no retry loop by design.
+          HTTP_CODE="$(curl -sS -o "$TMP_BODY" -w "%{http_code}" \
+            --max-time 20 --connect-timeout 10 \
+            -H "apikey: ${SUPABASE_ANON_KEY}" \
+            -H "Authorization: Bearer ${SUPABASE_ANON_KEY}" \
+            -H "Accept: application/json" \
+            "$ENDPOINT")" || {
+            echo "FAIL: connection error — Supabase is unreachable (network failure, timeout, or paused project)."
+            echo "Action: the owner must resume the project in the Supabase Dashboard; this workflow never auto-resumes."
+            exit 1
+          }
+
+          BODY_SIZE="$(wc -c < "$TMP_BODY" | tr -d ' ')"
+          echo "HTTP status: ${HTTP_CODE} (response bytes: ${BODY_SIZE})"
+
+          if [ "$HTTP_CODE" = "200" ]; then
+            if grep -q '"id"' "$TMP_BODY"; then
+              echo "PASS: read-only database query succeeded (heartbeat row returned)."
+              exit 0
+            fi
+            echo "FAIL: HTTP 200 but the expected heartbeat row was not returned."
+            exit 1
+          fi
+
+          case "$HTTP_CODE" in
+            401|403)
+              echo "FAIL: authentication/permission error (HTTP ${HTTP_CODE})."
+              echo "Hint: verify SUPABASE_ANON_KEY is the publishable key (not service-role) and that supabase/migrations/supabase_keepalive_heartbeat.sql has been applied."
+              ;;
+            404)
+              echo "FAIL: heartbeat table not found (HTTP 404)."
+              echo "Hint: apply supabase/migrations/supabase_keepalive_heartbeat.sql in the Supabase SQL Editor."
+              ;;
+            *)
+              echo "FAIL: Supabase request failed (HTTP ${HTTP_CODE}). The project may be unreachable or paused."
+              echo "Action: the owner must resume the project in the Supabase Dashboard; this workflow never auto-resumes."
+              ;;
+          esac
+          exit 1

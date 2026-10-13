@@ -225,12 +225,12 @@ function LoginForm() {
                   <span
                     className="w-3.5 h-3.5 border-2 border-white/40 border-t-white rounded-full animate-spin"
                   />
-                  Starting SIH Demo...
+                  Starting Live...
                 </span>
               ) : (
                 <>
                   <Play className="w-4 h-4" />
-                  <span>Try SIH Demo</span>
+                  <span>Live</span>
                 </>
               )}
             </button>
