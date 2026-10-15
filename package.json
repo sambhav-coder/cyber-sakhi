@@ -10,6 +10,7 @@
     "typecheck": "tsc --noEmit",
     "test": "vitest run",
     "test:watch": "vitest",
+    "keepalive:check": "node scripts/supabase-keepalive-check.mjs",
     "chain:compile": "hardhat --config blockchain/hardhat.config.ts compile",
     "chain:deploy:local": "hardhat --config blockchain/hardhat.config.ts run blockchain/scripts/deploy.ts --network hardhat",
     "chain:deploy:sepolia": "hardhat --config blockchain/hardhat.config.ts run blockchain/scripts/deploy.ts --network sepolia",

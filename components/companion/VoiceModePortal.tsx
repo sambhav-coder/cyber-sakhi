@@ -31,6 +31,10 @@ import {
   speakWithEngine,
   resolveFemaleVoice,
 } from "@/lib/voice/speech";
+import {
+  requestMicrophonePermission,
+  releaseMicProbe,
+} from "@/lib/voice/micPermission";
 import type { SttSession, SpeakHandle } from "@/lib/voice/speech";
 import { detectLanguage, explicitLanguageRequest, normalizeLanguage } from "@/lib/sakhiAI";
 import { getEntryLanguage } from "@/lib/entryLanguage";
@@ -54,7 +58,19 @@ export interface VoiceSegment {
 }
 
 type Phase = "welcome" | "active";
-type VoiceState = "idle" | "listening" | "thinking" | "speaking" | "error";
+/**
+ * Full Voice Mode lifecycle. "requesting" (mic permission prompt) renders as
+ * the listening orb; "transcribing" (finalizing speech) renders as thinking.
+ * The orb itself only supports idle/listening/thinking/speaking/error.
+ */
+type VoiceState =
+  | "idle"
+  | "requesting"
+  | "listening"
+  | "transcribing"
+  | "thinking"
+  | "speaking"
+  | "error";
 
 const AUTOPLAY_BLOCK_DETECT_MS = 2600;
 
@@ -135,6 +151,8 @@ export function VoiceModePortal({
 
   const sttRef = useRef<SttSession | null>(null);
   const speakRef = useRef<SpeakHandle | null>(null);
+  /** Short-lived getUserMedia probe stream (permission only — never recorded). */
+  const micProbeRef = useRef<MediaStream | null>(null);
   const welcomeAvatarRef = useRef<LiveSakhiAvatarHandle | null>(null);
   const activeDesktopAvatarRef = useRef<LiveSakhiAvatarHandle | null>(null);
   const activeMobileAvatarRef = useRef<LiveSakhiAvatarHandle | null>(null);
@@ -207,6 +225,10 @@ export function VoiceModePortal({
   const stopListening = () => {
     sttRef.current?.stop();
     sttRef.current = null;
+    if (micProbeRef.current) {
+      releaseMicProbe(micProbeRef.current);
+      micProbeRef.current = null;
+    }
   };
 
   const fullstop = () => {
@@ -229,6 +251,10 @@ export function VoiceModePortal({
     return () => {
       if (mq.removeEventListener) mq.removeEventListener("change", apply);
       fullstop();
+      if (micProbeRef.current) {
+        releaseMicProbe(micProbeRef.current);
+        micProbeRef.current = null;
+      }
       welcomeTimersRef.current.forEach((t) => window.clearTimeout(t));
     };
     // eslint-disable-next-line react-hooks/exhaustive-deps
@@ -554,22 +580,67 @@ export function VoiceModePortal({
   };
 
   const toggleMic = () => {
-    if (voiceState === "listening") {
+    if (voiceState === "listening" || voiceState === "requesting") {
       // Tap again = commit: the on-device browser session sends what it
       // heard (exactly one final utterance).
       stopListening();
+      setVoiceState("idle");
+      setOrbState("idle");
+      setStatusText("Mic stopped. Tap the orb to talk.");
       return;
     }
-    startListening();
+    void startListening();
   };
 
-  const startListening = () => {
-    if (voiceState === "thinking" || voiceState === "speaking") return;
+  /**
+   * Explicit user-gesture mic flow:
+   * requesting permission (getUserMedia probe, tracks released immediately)
+   * -> listening/recording (SpeechRecognition) -> transcribing -> thinking.
+   * Never requested on render; conflicting actions are disabled by state.
+   */
+  const startListening = async () => {
+    if (
+      voiceState === "thinking" ||
+      voiceState === "speaking" ||
+      voiceState === "requesting" ||
+      voiceState === "transcribing"
+    )
+      return;
     stopListening();
+    // Stop any stale reply audio before listening so speech never overlaps.
+    speakRef.current?.cancel();
+    speakRef.current = null;
     lastFinalRef.current = "";
     lastInterimRef.current = "";
     setInterim("");
     setError(null);
+    setVoiceState("requesting");
+    setOrbState("listening");
+    setStatusText("Requesting microphone permission…");
+
+    // Secure-context + permission probe BEFORE SpeechRecognition so denied /
+    // missing / unsupported mics surface with a precise, actionable error.
+    const probe = await requestMicrophonePermission();
+    if (!probe.ok) {
+      setVoiceState("error");
+      setOrbState("error");
+      setStatusText(
+        probe.code === "permission-denied"
+          ? "Microphone access was denied — allow the mic and tap the orb again."
+          : probe.code === "insecure-context"
+            ? "Mic needs HTTPS or localhost — please type instead or open the secure URL."
+            : "Mic isn't available — please type instead."
+      );
+      setError(probe.message);
+      if (probe.code !== "permission-denied") setTypingBox(true);
+      return;
+    }
+    // Permission granted: release the probe stream immediately (recognition
+    // opens its own capture) so no duplicate streams leak.
+    releaseMicProbe(probe.stream);
+    micProbeRef.current = null;
+
+    if (voiceStateRef.current !== "requesting") return;
     setVoiceState("listening");
     setOrbState("listening");
     setStatusText("Listening… I'll take it when you pause.");
@@ -589,11 +660,12 @@ export function VoiceModePortal({
       setTypingBox(true);
       return;
     }
-    // Use the browser's native SpeechRecognition API in production.
-    // The transcript is then language-detected per turn, and that detected
-    // language controls Sakhi's response/TTS for the current turn.
+    // Per-turn STT locale: the CURRENT switch language seeds recognition, and
+    // per-turn detection downstream still re-pins the reply/TTS language.
+    // ("auto" previously forced en-IN even for Hindi turns.)
+    const sttLang = langModeRef.current === "hi" ? "hi" : "en";
     console.log("🧪 [Voice Mode] STT ENGINE: browser-speech-recognition");
-    sttRef.current = startSttSession("auto", {
+    sttRef.current = startSttSession(sttLang, {
       onResult: (interimText) => {
         lastInterimRef.current = interimText;
         setInterim(interimText);
@@ -603,13 +675,25 @@ export function VoiceModePortal({
       },
       onEnd: () => {
         sttRef.current = null;
-        const heard = lastFinalRef.current || lastInterimRef.current;
-        console.log("🧪 [Voice Mode] STT RESULT:", { 
-          STT_ENGINE: "browser-speech-recognition", 
-          transcript: heard,
+        const heard = (lastFinalRef.current || lastInterimRef.current || "").trim();
+        console.log("🧪 [Voice Mode] STT RESULT:", {
+          STT_ENGINE: "browser-speech-recognition",
           length: heard?.length || 0
         });
-        if (voiceStateRef.current === "listening" && heard) {
+        if (!heard) {
+          if (voiceStateRef.current === "listening" || voiceStateRef.current === "transcribing") {
+            setError("I didn't hear anything. Tap the orb and speak, or type below.");
+            setVoiceState("idle");
+            setOrbState("idle");
+            setStatusText("Mic stopped. Tap the orb to talk.");
+          }
+          return;
+        }
+        if (voiceStateRef.current === "listening") {
+          // Transcribing: speech captured, now resolving the turn.
+          setVoiceState("transcribing");
+          setOrbState("thinking");
+          setStatusText("Got it — transcribing…");
           handleUtterance(heard);
         } else {
           setVoiceState("idle");
@@ -618,20 +702,20 @@ export function VoiceModePortal({
         }
       },
       onError: (code, message) => {
-        console.log("🧪 [Voice Mode] STT ERROR:", { 
-          STT_ENGINE: "browser-speech-recognition", 
-          code, 
-          message 
+        console.log("🧪 [Voice Mode] STT ERROR:", {
+          STT_ENGINE: "browser-speech-recognition",
+          code
         });
         sttRef.current = null;
-        if (code === "not-allowed") {
+        if (code === "not-allowed" || code === "service-not-allowed") {
           setError(message);
           setVoiceState("error");
           setOrbState("error");
           setStatusText("Microphone access was denied — allow the mic and tap the orb again.");
-        } else if (code === "no-speech") {
-          setVoiceState("idle");
-          setOrbState("idle");
+        } else if (code === "no-speech" || code === "audio-capture") {
+          setError(message);
+          setVoiceState("error");
+          setOrbState("error");
           setStatusText("Mic stopped. Tap the orb to talk.");
         } else if (code === "aborted") {
           setVoiceState("idle");
@@ -818,8 +902,8 @@ export function VoiceModePortal({
   };
 
   const micActive =
-    voiceState === "listening" &&
-    Boolean(sttRef.current);
+    (voiceState === "listening" || voiceState === "requesting") &&
+    Boolean(sttRef.current || voiceState === "requesting");
 
   // ════════════════════════════════════════════════════════════════
   // RENDER
@@ -859,7 +943,7 @@ export function VoiceModePortal({
         <div className="flex items-center gap-2 shrink-0">
           <LanguageToggle compact value={langMode} onChange={(v) => { setLangMode(v); langModeRef.current = v; setLanguage(v); languageRef.current = v; sttRef.current?.setLang?.(v); }} />
           <span className="hidden sm:inline-flex items-center gap-1.5 text-[10px] px-2.5 py-1 rounded-full bg-emerald-950/40 border border-emerald-700/40 text-emerald-300 font-bold">
-            {voiceState === "listening" ? "Mic Live" : voiceState === "speaking" ? "Sakhi Speaking" : voiceState === "thinking" ? "Thinking…" : voiceState === "error" ? "Needs Attention" : "Online"}
+            {voiceState === "requesting" ? "Requesting Mic…" : voiceState === "listening" ? "Mic Live" : voiceState === "transcribing" ? "Transcribing…" : voiceState === "speaking" ? "Sakhi Speaking" : voiceState === "thinking" ? "Thinking…" : voiceState === "error" ? "Needs Attention" : "Online"}
           </span>
           <span className="hidden sm:inline-flex items-center gap-1.5 text-[10px] px-2.5 py-1 rounded-full bg-slate-900 border border-slate-700/60 text-emerald-300 font-bold">
             <Sparkles className="w-3 h-3" />
@@ -1243,7 +1327,11 @@ export function VoiceModePortal({
               <button
                 type="button"
                 onClick={toggleMic}
-                disabled={voiceState === "thinking" || voiceState === "speaking"}
+                disabled={
+                  voiceState === "transcribing" ||
+                  voiceState === "thinking" ||
+                  voiceState === "speaking"
+                }
                 aria-label={micActive ? "Stop and send" : "Start listening"}
                 className={`relative rounded-full transition disabled:opacity-40 ${
                   micActive ? "scale-[1.03]" : "hover:scale-[1.02]"

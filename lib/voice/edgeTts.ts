@@ -2,14 +2,19 @@ import fs from "fs/promises";
 import os from "os";
 import path from "path";
 import crypto from "crypto";
+import {
+  SAKHI_SERVER_VOICES,
+  type SakhiServerVoiceLanguage,
+} from "./voices";
 
-export type EdgeVoiceLanguage = "en" | "hi" | "hinglish";
+export type EdgeVoiceLanguage = SakhiServerVoiceLanguage;
 
-export const VOICE_BY_LANGUAGE: Record<EdgeVoiceLanguage, { voice: string; lang: string }> = {
-  en: { voice: "en-IN-NeerjaNeural", lang: "en-IN" },
-  hi: { voice: "hi-IN-SwaraNeural", lang: "hi-IN" },
-  hinglish: { voice: "hi-IN-SwaraNeural", lang: "hi-IN" },
-};
+/**
+ * Single authoritative mapping — re-exported here for backward compatibility.
+ * The source of truth lives in `./voices.ts` (see its recovery evidence).
+ */
+export const VOICE_BY_LANGUAGE: Record<EdgeVoiceLanguage, { voice: string; lang: string }> =
+  SAKHI_SERVER_VOICES;
 
 export interface WordTimestamp {
   text: string;

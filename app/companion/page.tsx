@@ -194,6 +194,14 @@ function CompanionContent() {
   const introAbortRef = useRef(false);
   const speechStartedRef = useRef(false);
 
+  // ── Per-reply speech (Chat stays text-first; each Sakhi reply offers an
+  //    opt-in Play/Stop bound to THAT reply's exact text + turn language).
+  //    One active reply handle at a time; StrictMode-safe via id gating. ──
+  const [speakingMessageId, setSpeakingMessageId] = useState<string | null>(null);
+  const [replySpeechError, setReplySpeechError] = useState<string | null>(null);
+  const replySpeakRef = useRef<SpeakHandle | null>(null);
+  const speakingMessageRef = useRef<string | null>(null);
+
   const messagesEndRef = useRef<HTMLDivElement>(null);
   const inputRef = useRef<HTMLTextAreaElement>(null);
   const uploadInputRef = useRef<HTMLInputElement>(null);
@@ -514,6 +522,73 @@ function CompanionContent() {
     avatarRef.current?.speakEnd();
   };
 
+  // ---- per-reply speech ------------------------------------------------------
+  // Text and audio stay bound to the SAME reply id. Stale handles are
+  // cancelled before a new reply speaks; empty text, API failure, malformed
+  // audio, and playback rejection surface as an inline error without losing
+  // the text. Mute/stop performs a real cancel.
+  const stopReplySpeech = () => {
+    try {
+      replySpeakRef.current?.cancel();
+    } catch {
+      /* noop */
+    }
+    replySpeakRef.current = null;
+    speakingMessageRef.current = null;
+    setSpeakingMessageId(null);
+  };
+
+  const speakReplyMessage = (messageId: string, text: string) => {
+    if (!text.trim()) {
+      setReplySpeechError("That reply has no speakable text.");
+      return;
+    }
+    // Toggle: tapping the speaking reply stops it for real.
+    if (speakingMessageRef.current === messageId) {
+      stopReplySpeech();
+      return;
+    }
+    stopReplySpeech();
+    stopIntroAudio();
+    setReplySpeechError(null);
+    // Per-turn language: THIS reply's text decides the server voice
+    // (Edge TTS — en: Neerja, hi/hinglish: Swara), never the browser locale.
+    const turnLang = detectLanguage(text) === "hinglish" ? "hinglish" : langPin;
+    const replyLang = turnLang === "hi" || turnLang === "hinglish" ? turnLang : "en";
+    speakingMessageRef.current = messageId;
+    setSpeakingMessageId(messageId);
+    const handle = speakWithEngine(text, introVoiceRef.current, {
+      language: replyLang,
+      rate: 1,
+      pitch: 1.03,
+      onAudioElement: (el) => avatarRef.current?.attachAudioElement(el),
+      onEnd: () => {
+        if (speakingMessageRef.current !== messageId) return;
+        avatarRef.current?.speakEnd();
+        stopReplySpeech();
+      },
+      onError: () => {
+        if (speakingMessageRef.current !== messageId) return;
+        avatarRef.current?.speakEnd();
+        stopReplySpeech();
+        setReplySpeechError("Voice playback stopped — the text reply above is still complete.");
+      },
+    });
+    replySpeakRef.current = handle;
+  };
+
+  // Stop stale reply speech on unmount / navigation away.
+  useEffect(() => {
+    return () => {
+      try {
+        replySpeakRef.current?.cancel();
+      } catch {
+        /* noop */
+      }
+    };
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, []);
+
   // Autoplay attempt — WAIT for both the voice to be resolved and the page
   // to settle before attempting speech. If the browser blocks autoplay, we
   // surface a clean Meet Sakhi button instead of retrying.
@@ -700,6 +775,9 @@ function CompanionContent() {
     const query = (text ?? inputText).trim();
     const atts = forcedAttachments ?? attachments;
     if (!query) return null;
+
+    // A new turn replaces any stale reply audio — never overlap speech.
+    stopReplySpeech();
 
     const ctrl = new AbortController();
     sendAbortRef.current?.abort();
@@ -1688,6 +1766,11 @@ function CompanionContent() {
           </div>
 
           {/* Chat messages */}
+          {replySpeechError && (
+            <p role="status" className="mb-2 text-[11px] text-amber-300/90">
+              {replySpeechError}
+            </p>
+          )}
           {hasMessages ? (
             <div className="rounded-3xl glass-panel border-slate-800/80 p-4 sm:p-6 min-h-[420px] max-h-[580px] overflow-y-auto space-y-4">
               {messages.map((msg) => (
@@ -1772,19 +1855,37 @@ function CompanionContent() {
                       }`}
                     >
                       {msg.sender === "sakhi" && (
-                        <button
-                          type="button"
-                          onClick={() => void copyText(msg.id, msg.text)}
-                          aria-label={copiedId === msg.id ? "Copied" : "Copy response"}
-                          className="inline-flex items-center gap-1 px-1.5 py-0.5 rounded-md hover:bg-slate-800 transition text-slate-400 hover:text-white"
-                        >
-                          {copiedId === msg.id ? (
-                            <Check className="w-3 h-3 text-emerald-400" />
-                          ) : (
-                            <Copy className="w-3 h-3" />
-                          )}
-                          <span>{copiedId === msg.id ? "Copied" : "Copy"}</span>
-                        </button>
+                        <>
+                          <button
+                            type="button"
+                            onClick={() => void copyText(msg.id, msg.text)}
+                            aria-label={copiedId === msg.id ? "Copied" : "Copy response"}
+                            className="inline-flex items-center gap-1 px-1.5 py-0.5 rounded-md hover:bg-slate-800 transition text-slate-400 hover:text-white"
+                          >
+                            {copiedId === msg.id ? (
+                              <Check className="w-3 h-3 text-emerald-400" />
+                            ) : (
+                              <Copy className="w-3 h-3" />
+                            )}
+                            <span>{copiedId === msg.id ? "Copied" : "Copy"}</span>
+                          </button>
+                          <button
+                            type="button"
+                            onClick={() => speakReplyMessage(msg.id, msg.text)}
+                            aria-label={
+                              speakingMessageId === msg.id ? "Stop response audio" : "Play response aloud"
+                            }
+                            aria-pressed={speakingMessageId === msg.id}
+                            className="inline-flex items-center gap-1 px-1.5 py-0.5 rounded-md hover:bg-slate-800 transition text-slate-400 hover:text-white"
+                          >
+                            {speakingMessageId === msg.id ? (
+                              <Square className="w-3 h-3 text-emergency-300" />
+                            ) : (
+                              <Volume2 className="w-3 h-3" />
+                            )}
+                            <span>{speakingMessageId === msg.id ? "Stop" : "Play"}</span>
+                          </button>
+                        </>
                       )}
                       <span>{msg.timestamp}</span>
                     </div>
